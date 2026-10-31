@@ -707,25 +707,40 @@ pub async fn handle(
     eprintln!("honk-dataplane: {}", decision.log_line());
     match decision.kind {
         DecisionKind::Block => Ok(()),
-        DecisionKind::Direct => direct_with_prelude(stream, dest, &prelude).await,
+        DecisionKind::Direct => relay_io(
+            direct_with_prelude(stream, dest, &prelude).await,
+            dest,
+            &dest.to_string(),
+        ),
         DecisionKind::Proxy {
             server_host,
             server_port,
             password,
         } => {
             let host = domain.unwrap_or_else(|| dest.ip().to_string());
-            crate::dial_honk_outbound(
-                &server_host,
-                server_port,
-                &password,
-                &host,
-                dest.port(),
-                stream,
-                &prelude,
+            let peer = format!("{server_host}:{server_port}");
+            relay_io(
+                crate::dial_honk_outbound(
+                    &server_host,
+                    server_port,
+                    &password,
+                    &host,
+                    dest.port(),
+                    stream,
+                    &prelude,
+                )
+                .await,
+                dest,
+                &peer,
             )
-            .await
         }
     }
+}
+
+fn relay_io(result: std::io::Result<()>, dest: SocketAddr, peer: &str) -> std::io::Result<()> {
+    result.map_err(|error| {
+        std::io::Error::new(error.kind(), format!("{error} dest={dest} peer={peer}"))
+    })
 }
 
 async fn direct_with_prelude(
@@ -748,6 +763,9 @@ pub fn ui_rows(path: &Path, cache: Option<&Path>, selections: &Path) -> anyhow::
     let mut html = String::new();
     let mut names: Vec<_> = loaded.groups.keys().cloned().collect();
     names.sort();
+    if names.is_empty() {
+        html.push_str("<tr><th width=\"40%\">策略组</th><td>配置中没有策略组。</td></tr>\n");
+    }
     for name in names {
         let members = &loaded.groups[&name];
         let current = loaded.defaults.get(&name).cloned().unwrap_or_default();
@@ -763,12 +781,20 @@ pub fn ui_rows(path: &Path, cache: Option<&Path>, selections: &Path) -> anyhow::
             html.push('"');
             html.push_str(selected);
             html.push('>');
-            html.push_str(&escape(&label));
+            html.push_str(&escape(&choice_text(&label)));
             html.push_str("</option>");
         }
         html.push_str("</select></td></tr>\n");
     }
     Ok(html)
+}
+
+fn choice_text(label: &str) -> String {
+    match label {
+        "direct" => "直连".to_string(),
+        "block" => "拒绝".to_string(),
+        other => other.to_string(),
+    }
 }
 
 fn choice_labels(loaded: &Loaded, members: &[Member]) -> Vec<String> {
@@ -794,6 +820,23 @@ fn escape(text: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn relay_error_names_dest_and_peer() {
+        let dest = "1.1.1.1:443".parse().unwrap();
+        let error = relay_io(
+            Err(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "Connection refused",
+            )),
+            dest,
+            "203.0.113.10:8388",
+        )
+        .unwrap_err();
+        let text = error.to_string();
+        assert!(text.contains("dest=1.1.1.1:443"), "{text}");
+        assert!(text.contains("peer=203.0.113.10:8388"), "{text}");
+    }
 
     #[test]
     fn suffix_and_cidr_keep_source_order() {
