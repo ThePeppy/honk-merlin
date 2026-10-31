@@ -42,6 +42,26 @@ function honkText(id, value) {
 	node.appendChild(document.createTextNode(value));
 }
 
+var honkRefusal = {
+	need_conntrack: "Conntrack is not usable, so interception was not enabled. conntrack 不可用，因此没有开始拦截。",
+	need_model: "This addon only runs on an RT-BE88U. 仅支持 RT-BE88U。",
+	need_sw_mode: "Router mode is required. 需要路由模式 (sw_mode 1)。",
+	need_gateway: "No WAN gateway was found. 没有找到 WAN 网关。",
+	need_primary: "The LAN primary address does not match lan_ipaddr. 局域网主地址与 lan_ipaddr 不一致。",
+	need_facts: "The redirect plan was refused. 重定向计划被拒绝。",
+	need_curl: "curl was not found, so the subscription was not refreshed. 没有找到 curl，订阅没有刷新。"
+};
+
+function honkNote(runtime, detail) {
+	if (runtime !== "refused") {
+		return "";
+	}
+	if (honkRefusal[detail]) {
+		return honkRefusal[detail];
+	}
+	return detail;
+}
+
 function initial() {
 	show_menu();
 	var page = window.location.pathname.split("/").pop();
@@ -53,6 +73,7 @@ function initial() {
 	var minutes = honkSafe(db.honk_confirm_minutes) || "5";
 	honkText("honk_runtime", runtime);
 	honkText("honk_detail", detail);
+	honkText("honk_note", honkNote(runtime, detail));
 	var select = document.getElementById("honk_confirm_minutes");
 	if (select && /^(1|2|5|10|15|30)$/.test(minutes)) {
 		select.value = minutes;
@@ -74,8 +95,14 @@ function submitHonk(action) {
 	}
 	document.form.amng_custom.value = fields.join(";");
 	document.form.action_script.value = action;
+	document.form.action_wait.value = "8";
 	showLoading();
 	document.form.submit();
+	// start_apply can hide the spinner without painting this page again.
+	// Reload after the service-event child has stored honk_runtime.
+	setTimeout(function() {
+		window.location.reload();
+	}, 8000);
 }
 </script>
 </head>
@@ -90,7 +117,7 @@ function submitHonk(action) {
 <input type="hidden" name="next_page" value="">
 <input type="hidden" name="modified" value="0">
 <input type="hidden" name="action_mode" value="apply">
-<input type="hidden" name="action_wait" value="5">
+<input type="hidden" name="action_wait" value="8">
 <input type="hidden" name="action_script" value="">
 <input type="hidden" name="amng_custom" id="amng_custom" value="">
 
@@ -116,6 +143,7 @@ function submitHonk(action) {
 										<div style="margin:10px 0 10px 5px;" class="splitLine"></div>
 										<div class="formfontdesc">Phase 1 listens on the LAN address and copies TCP to the original destination. It does not dial a proxy node. Interception stays off after every boot until Enable is pressed on this page. Keep an SSH session open. If LAN web access fails, wait for the confirm timer or run the uninstall script.</div>
 										<div class="formfontdesc">第一阶段只把局域网 IPv4 TCP 转到原始目的地址，不使用代理节点。每次开机都不会拦截，必须在本页点击 Enable。请保持一个 SSH 会话。如果网页打不开，等待确认倒计时结束，或执行卸载脚本。</div>
+										<div id="honk_note" class="formfontdesc" style="color:#FC0;"></div>
 
 										<table width="100%" border="1" align="center" cellpadding="4" cellspacing="0" bordercolor="#6b8fa3" class="FormTable">
 											<thead>

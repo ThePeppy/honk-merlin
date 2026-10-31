@@ -25,10 +25,65 @@ HONK_ARM_GRACE=${HONK_ARM_GRACE:-30}
 HONK_SKIP_MOUNT=${HONK_SKIP_MOUNT:-0}
 HONK_SKIP_WEBUI=${HONK_SKIP_WEBUI:-0}
 HONK_SCRIPT_DIR=${HONK_SCRIPT_DIR:-$(cd "$(dirname "$0")" && pwd)}
+# service-event's ash has no `command` builtin, and `[ -x name ]` does not
+# search PATH. Probe these directories instead.
+HONK_BIN_DIRS=${HONK_BIN_DIRS:-"/usr/sbin /usr/bin /sbin /opt/sbin /opt/bin"}
+
+honk_resolve() {
+    local name="$1"
+    local dir
+    case $name in
+        /*)
+            if [ -x "$name" ]; then
+                printf '%s\n' "$name"
+                return 0
+            fi
+            return 1
+            ;;
+        ''|*[!A-Za-z0-9._-]*)
+            return 1
+            ;;
+    esac
+    # shellcheck disable=SC2086
+    for dir in $HONK_BIN_DIRS; do
+        if [ -x "$dir/$name" ]; then
+            printf '%s\n' "$dir/$name"
+            return 0
+        fi
+    done
+    return 1
+}
+
+honk_pin_bins() {
+    local bin
+    bin=$(honk_resolve "$HONK_CONNTRACK" || true)
+    if [ -n "$bin" ]; then
+        HONK_CONNTRACK=$bin
+        export HONK_CONNTRACK
+    fi
+    bin=$(honk_resolve "$HONK_IPTABLES" || true)
+    if [ -n "$bin" ]; then
+        HONK_IPTABLES=$bin
+    fi
+    bin=$(honk_resolve "$HONK_IP" || true)
+    if [ -n "$bin" ]; then
+        HONK_IP=$bin
+    fi
+    bin=$(honk_resolve "$HONK_NVRAM" || true)
+    if [ -n "$bin" ]; then
+        HONK_NVRAM=$bin
+    fi
+    bin=$(honk_resolve "$HONK_PING" || true)
+    if [ -n "$bin" ]; then
+        HONK_PING=$bin
+    fi
+}
 
 honk_log() {
-    if command -v logger >/dev/null 2>&1; then
-        logger -t honk "$*" || true
+    local logger
+    logger=$(honk_resolve logger || true)
+    if [ -n "$logger" ]; then
+        "$logger" -t honk "$*" || true
     fi
     echo "honk: $*" >&2
 }
@@ -97,6 +152,7 @@ honk_stop_listener() {
 
 honk_disarm() {
     local reason="${1:-disarmed}"
+    honk_pin_bins
     honk_unlink
     honk_conntrack_delete
     honk_stop_listener
@@ -128,15 +184,14 @@ honk_minutes() {
 }
 
 honk_have_conntrack() {
-    if [ -x "$HONK_CONNTRACK" ] || command -v "$HONK_CONNTRACK" >/dev/null 2>&1; then
-        "$HONK_CONNTRACK" -C >/dev/null 2>&1
-        return $?
-    fi
-    return 1
+    honk_pin_bins
+    [ -x "$HONK_CONNTRACK" ] || return 1
+    "$HONK_CONNTRACK" -C >/dev/null 2>&1
 }
 
 honk_gather_facts() {
     local model odm sw gw ifname lan_ip lan_mask primary facts locals
+    honk_pin_bins
     model=$("$HONK_NVRAM" get productid 2>/dev/null || true)
     odm=$("$HONK_NVRAM" get odmpid 2>/dev/null || true)
     if [ "$model" != "RT-BE88U" ] && [ "$odm" != "RT-BE88U" ]; then
@@ -236,7 +291,8 @@ honk_write_selections() {
 }
 
 honk_refresh() {
-    local url regex tmp fragment page
+    local url regex tmp fragment page curl
+    honk_pin_bins
     honk_export_config
     [ -n "${HONK_CONFIG:-}" ] || return 1
     [ -x "$HONK_BIN" ] || return 1
@@ -245,11 +301,12 @@ honk_refresh() {
     [ -n "$url" ] || return 1
     regex=$(sed -n 's/^# merlin-policy-regex://p' "$HONK_CONFIG" | head -n 1)
     tmp=$(honk_state honk.sub)
-    if ! command -v curl >/dev/null 2>&1; then
+    curl=$(honk_resolve curl || true)
+    if [ -z "$curl" ]; then
         honk_log need_curl
         return 1
     fi
-    curl -fsSL --max-time 30 -o "$tmp" "$url" || return 1
+    "$curl" -fsSL --max-time 30 -o "$tmp" "$url" || return 1
     "$HONK_BIN" import-surge --input "$tmp" --regex "$regex" --out "$HONK_NODE_CACHE" || return 1
     fragment=$(honk_state honk.groups)
     if [ -f "$HONK_NODE_CACHE" ]; then
@@ -324,6 +381,7 @@ honk_confirm() {
 
 honk_watch_step() {
     local pid now deadline gw fails
+    honk_pin_bins
     if [ ! -f "$(honk_state honk.armed)" ]; then
         return 0
     fi
@@ -580,6 +638,7 @@ esac"
 
 honk_install() {
     local src support
+    honk_pin_bins
     support=$("$HONK_NVRAM" get rc_support 2>/dev/null || true)
     if ! printf '%s\n' "$support" | grep -q am_addons; then
         honk_log "firmware has no am_addons"

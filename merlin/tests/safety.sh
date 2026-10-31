@@ -122,6 +122,17 @@ esac
 exit 0
 EOF
 
+cat >"$work/bin/command" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$work/command.log"
+exit 1
+EOF
+cat >"$work/bin/which" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$work/which.log"
+exit 1
+EOF
+
 chmod 755 "$work/bin/"*
 
 export PATH="$work/bin:$PATH"
@@ -159,6 +170,47 @@ grep -q 'HONK_LISTEN_PORT=39527' "$scripts/honk-common.sh" || fail "script port 
 
 # shellcheck disable=SC1091
 . "$scripts/honk-common.sh"
+
+if grep -n 'command -v' "$scripts"/*.sh; then
+    fail "router script uses command -v"
+fi
+if grep -n ' which ' "$scripts"/*.sh; then
+    fail "router script uses which"
+fi
+page=$root/merlin/www/Tools_Honk.asp
+grep -q 'id="honk_note"' "$page" || fail "page has no refusal note"
+grep -q 'window.location.reload' "$page" || fail "page does not reload after apply"
+grep -q 'Conntrack is not usable' "$page" || fail "page does not explain need_conntrack"
+
+saved_ct=$HONK_CONNTRACK
+saved_dirs=$HONK_BIN_DIRS
+mkdir -p "$work/root/usr/sbin" "$work/root/usr/bin" "$work/root/opt/bin"
+cat >"$work/root/usr/bin/conntrack" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+cat >"$work/root/usr/sbin/conntrack" <<'EOF'
+#!/bin/sh
+[ "${1:-}" = "-C" ]
+EOF
+cat >"$work/root/opt/bin/curl" <<'EOF'
+#!/bin/sh
+printf '%s\n' curl-ok
+EOF
+chmod 755 "$work/root/usr/bin/conntrack" "$work/root/usr/sbin/conntrack" "$work/root/opt/bin/curl"
+HONK_CONNTRACK=conntrack
+HONK_BIN_DIRS="$work/root/usr/sbin $work/root/usr/bin $work/root/opt/bin"
+honk_have_conntrack || fail "bare conntrack name was not resolved"
+[ "$HONK_CONNTRACK" = "$work/root/usr/sbin/conntrack" ] || fail "conntrack was not pinned to an absolute path"
+rm -f "$work/root/usr/sbin/conntrack" "$work/root/usr/bin/conntrack"
+HONK_CONNTRACK=conntrack
+if honk_have_conntrack; then
+    fail "absent conntrack was accepted"
+fi
+[ "$HONK_CONNTRACK" = "conntrack" ] || fail "a missing bare name was replaced"
+[ "$(honk_resolve curl)" = "$work/root/opt/bin/curl" ] || fail "curl was not resolved from the probe list"
+HONK_CONNTRACK=$saved_ct
+HONK_BIN_DIRS=$saved_dirs
 
 echo 0 >"$jump"
 : >"$iptlog"
@@ -347,5 +399,12 @@ fi
 [ "$(grep -c 'tabName: "Honk"' "$work/menu-install-tmp.js")" = 1 ] || fail "install did not leave one Honk tab"
 grep -A1 'tabName: "<#613#>"' "$work/menu-install-tmp.js" | grep -q 'tabName: "Honk"' || fail "Honk tab was not inserted after the System page"
 grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu-install-tmp.js" || fail "install treated the exclude list as the anchor"
+
+if [ -s "$work/command.log" ]; then
+    fail "a router script invoked command"
+fi
+if [ -s "$work/which.log" ]; then
+    fail "a router script invoked which"
+fi
 
 echo "safety: ok"
