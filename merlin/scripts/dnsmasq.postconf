@@ -1,0 +1,16 @@
+#!/bin/sh
+# honk: send dnsmasq upstream to honk DNS so redirect dial_mode learns domain<->IP
+# (Merlin honk does not intercept UDP; without this, LAN DNS bypasses honk.)
+CONFIG=$1
+[ -n "$CONFIG" ] || exit 0
+if [ -f /usr/sbin/helper.sh ]; then
+  . /usr/sbin/helper.sh
+  pc_delete "servers-file=" "$CONFIG"
+  # avoid duplicate server lines on repeated runs
+  pc_delete "server=127.0.0.1#5353" "$CONFIG"
+  pc_append "server=127.0.0.1#5353" "$CONFIG"
+else
+  sed -i '/^servers-file=/d' "$CONFIG"
+  sed -i '/^server=127.0.0.1#5353$/d' "$CONFIG"
+  echo 'server=127.0.0.1#5353' >> "$CONFIG"
+fi

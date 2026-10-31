@@ -205,7 +205,7 @@ experimental {
 
 ## Merlin 插件这一阶段不做什么
 
-- 不改 dnsmasq。UDP 不进 REDIRECT，所以 QUIC 和普通 DNS 仍走 dnsmasq。发往路由器的 TCP 53 也会在 REDIRECT 之前 RETURN。
+- UDP 不进 REDIRECT。`firewall-start` 在 FORWARD 拒绝局域网 UDP/443，让 QUIC 回落到被 REDIRECT 的 TCP；其它 UDP 直接出去。发往路由器的 TCP 53 也会在 REDIRECT 之前 RETURN。`merlin/scripts/dnsmasq.postconf` 只是路由器上现有的文件，把 dnsmasq 上游指到 `127.0.0.1#5353`；`honk_install` 不会把它拷到 `/jffs/scripts`。
 - 安装包带有 `geoip.dat` 和 `geosite.dat`。启动时 `DAE_LOCATION_ASSET` 指向 `/jffs/addons/honk`，`dip(geoip:...)` 和 `domain(geosite:...)` 可以离线命中。
 - 发往 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`、`100.64.0.0/10` 以及路由器自己地址的 TCP，在进入 honk 之前就 RETURN。
 - 没有 `config.dae` 时不会启用。订阅由 honk-core 自己拉取，使用它的默认 User-Agent，内容是 base64 的 `ss://` 列表。

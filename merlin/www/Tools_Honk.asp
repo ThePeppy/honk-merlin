@@ -43,34 +43,36 @@ function honkText(id, value) {
 }
 
 var honkRuntime = {
-	off: "关闭",
-	armed: "已启用",
-	confirmed: "已确认",
-	refused: "未启用"
+	off: "已关闭",
+	on: "运行中",
+	armed: "运行中",
+	confirmed: "运行中",
+	refused: "未能启动"
 };
 
 var honkDetail = {
-	boot_off: "开机未启用",
-	armed: "等待确认",
-	confirmed: "已确认",
-	off: "关闭",
-	stopped: "已停用",
-	restart: "正在重新启用",
+	boot_off: "开机默认关闭，请手动启动",
+	running: "运行中",
+	armed: "运行中",
+	confirmed: "运行中",
+	off: "已关闭",
+	stopped: "已关闭",
+	restart: "正在重启",
 	uninstalled: "已卸载",
-	not_armed: "尚未启用",
-	listener_down: "监听已停止，已恢复",
-	confirm_timeout: "未在时限内确认，已恢复",
-	ping_failed: "网关不通，已恢复",
-	apply_failed: "规则未能生效，已恢复",
-	need_conntrack: "conntrack 不可用，因此没有开始拦截。",
-	need_model: "仅支持 RT-BE88U。",
-	need_sw_mode: "需要路由模式。",
-	need_gateway: "没有找到 WAN 网关。",
-	need_primary: "局域网主地址与 lan_ipaddr 不一致。",
-	need_facts: "重定向计划被拒绝。",
-	need_curl: "没有找到 curl，订阅没有刷新。",
-	need_subscription: "订阅下载失败，因此没有开始拦截。",
-	need_config: "配置没有载入，因此没有开始拦截。"
+	not_armed: "尚未启动",
+	listener_down: "进程已退出，已关闭拦截",
+	confirm_timeout: "已关闭",
+	ping_failed: "网关不通，已关闭拦截",
+	apply_failed: "规则未能生效，已关闭拦截",
+	need_conntrack: "conntrack 不可用，未能启动",
+	need_model: "仅支持 RT-BE88U",
+	need_sw_mode: "需要路由模式",
+	need_gateway: "未找到 WAN 网关",
+	need_primary: "局域网主地址与 lan_ipaddr 不一致",
+	need_facts: "重定向计划被拒绝",
+	need_curl: "未找到 curl",
+	need_subscription: "订阅相关请在 doona 面板处理",
+	need_config: "缺少 /jffs/addons/honk/config.dae，未能启动"
 };
 
 function honkLabel(table, value) {
@@ -96,36 +98,17 @@ function initial() {
 	var db = custom_settings || {};
 	var runtime = honkSafe(db.honk_runtime) || "off";
 	var detail = honkSafe(db.honk_detail) || "boot_off";
-	var minutes = honkSafe(db.honk_confirm_minutes) || "5";
 	honkText("honk_runtime", honkLabel(honkRuntime, runtime));
 	honkText("honk_detail", honkLabel(honkDetail, detail));
 	honkText("honk_note", honkNote(runtime, detail));
-	var select = document.getElementById("honk_confirm_minutes");
-	if (select && /^(1|2|5|10|15|30)$/.test(minutes)) {
-		select.value = minutes;
-	}
 }
 
 function submitHonk(action) {
-	var minutes = document.getElementById("honk_confirm_minutes").value;
-	if (!/^(1|2|5|10|15|30)$/.test(minutes)) {
-		minutes = "5";
-	}
-	var fields = ["honk_confirm_minutes=" + minutes];
-	var nodes = document.getElementsByTagName("select");
-	var i;
-	for (i = 0; i < nodes.length; i++) {
-		if (nodes[i].id.indexOf("honk_sel_") === 0) {
-			fields.push(nodes[i].id + "=" + nodes[i].value);
-		}
-	}
-	document.form.amng_custom.value = fields.join(";");
+	document.form.amng_custom.value = "";
 	document.form.action_script.value = action;
 	document.form.action_wait.value = "8";
 	showLoading();
 	document.form.submit();
-	// start_apply can hide the spinner without painting this page again.
-	// Reload after the service-event child has stored honk_runtime.
 	setTimeout(function() {
 		window.location.reload();
 	}, 8000);
@@ -167,8 +150,8 @@ function submitHonk(action) {
 										<div>&nbsp;</div>
 										<div class="formfonttitle">Honk 代理</div>
 										<div style="margin:10px 0 10px 5px;" class="splitLine"></div>
-										<div class="formfontdesc">Honk 接管局域网的 TCP 连接，并按配置中的规则分流。</div>
-										<div class="formfontdesc">点启用开始。启用后请在下方设定的分钟内点确认。点停用可立即恢复。每次开机都不会自动启用；超时未确认也会自动恢复。</div>
+										<div class="formfontdesc">本页只负责启动、重启与关闭 Honk。订阅、节点、分组、规则与配置请在 doona 面板中管理。</div>
+										<div class="formfontdesc">开机不会自动启动。关闭可立即停止拦截并恢复加速。</div>
 										<div id="honk_note" class="formfontdesc"></div>
 
 										<table width="100%" border="1" align="center" cellpadding="4" cellspacing="0" bordercolor="#6b8fa3" class="FormTable">
@@ -179,44 +162,30 @@ function submitHonk(action) {
 											</thead>
 											<tr>
 												<th width="40%">运行</th>
-												<td id="honk_runtime">关闭</td>
+												<td id="honk_runtime">已关闭</td>
 											</tr>
 											<tr>
 												<th>详情</th>
-												<td id="honk_detail">开机未启用</td>
+												<td id="honk_detail">开机默认关闭，请手动启动</td>
 											</tr>
 											<tr>
 												<th>监听</th>
 												<td>局域网地址，TCP 端口与 tproxy_port 相同（未写时为 12345）。UDP 不经过 Honk。</td>
 											</tr>
 											<tr>
-												<th width="40%">策略组</th>
-												<td>在面板中选择各策略组的节点。<a href="http://192.168.2.1:9090/ui/">打开面板</a></td>
+												<th>面板</th>
+												<td><a href="http://192.168.2.1:9090/ui/" target="_blank">打开 doona（9090）</a></td>
 											</tr>
 											<tr>
-												<th>配置</th>
-												<td>/jffs/addons/honk/config.dae</td>
-											</tr>
-											<tr>
-												<th>确认时间（分钟）</th>
-												<td>
-													<select id="honk_confirm_minutes" class="input_option">
-														<option value="1">1 分钟</option>
-														<option value="2">2 分钟</option>
-														<option value="5" selected>5 分钟</option>
-														<option value="10">10 分钟</option>
-														<option value="15">15 分钟</option>
-														<option value="30">30 分钟</option>
-													</select>
-												</td>
+												<th>配置文件</th>
+												<td>/jffs/addons/honk/config.dae（含 include nodes.dae）</td>
 											</tr>
 										</table>
 
 										<div class="apply_gen">
-											<input type="button" class="button_gen" onclick="submitHonk('start_honk');" value="启用"/>
-											<input type="button" class="button_gen" onclick="submitHonk('start_honkconfirm');" value="确认"/>
-											<input type="button" class="button_gen" onclick="submitHonk('stop_honk');" value="停用"/>
-											<input type="button" class="button_gen" onclick="submitHonk('start_honkrefresh');" value="刷新"/>
+											<input type="button" class="button_gen" onclick="submitHonk('start_honk');" value="启动"/>
+											<input type="button" class="button_gen" onclick="submitHonk('restart_honk');" value="重启"/>
+											<input type="button" class="button_gen" onclick="submitHonk('stop_honk');" value="关闭"/>
 										</div>
 									</div>
 								</td>

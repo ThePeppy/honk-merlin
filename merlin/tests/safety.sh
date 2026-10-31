@@ -5,7 +5,8 @@ set -eu
 root=$(cd "$(dirname "$0")/../.." && pwd)
 scripts=$root/merlin/scripts
 work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
+# bash 3.2 runs an EXIT trap when wait reaps a signaled child, then continues.
+trap 'rm -rf "$work"' ERR
 
 binlog=$work/bin.log
 iptlog=$work/iptables.log
@@ -162,12 +163,17 @@ export HONK_PING_FAIL=""
 
 fail() {
     echo "safety: $*" >&2
+    rm -rf "$work"
     exit 1
 }
 
-# The firewall hook must not be able to install nat rules.
-if grep -v '^#' "$scripts/honk-firewall.sh" | grep -q iptables; then
-    fail "firewall-start script mentions iptables"
+# firewall-start may REJECT LAN QUIC. It must not install the nat redirect.
+fw_code=$(grep -v '^#' "$scripts/honk-firewall.sh" || true)
+printf '%s\n' "$fw_code" | grep -q -- '-p udp' || fail "firewall hook does not match udp"
+printf '%s\n' "$fw_code" | grep -q -- '--dport 443' || fail "firewall hook does not reject udp/443"
+printf '%s\n' "$fw_code" | grep -q REJECT || fail "firewall hook does not reject"
+if printf '%s\n' "$fw_code" | grep -E -q 'NAT|REDIRECT|HONK_PRE'; then
+    fail "firewall-start script changes nat"
 fi
 
 grep -q 'HONK_CHAIN=HONK_PRE' "$scripts/honk-common.sh" || fail "script chain drifted"
@@ -196,6 +202,12 @@ grep -q 'conntrack 不可用' "$page" || fail "page does not explain need_conntr
 grep -q 'Honk 代理' "$page" || fail "page title is not Chinese"
 grep -q 'http://192.168.2.1:9090/ui/' "$page" || fail "page has no panel link"
 grep -q '12345' "$page" || fail "page does not name the default port"
+grep -q 'value="启动"' "$page" || fail "page has no start button"
+grep -q 'value="重启"' "$page" || fail "page has no restart button"
+grep -q 'value="关闭"' "$page" || fail "page has no stop button"
+if grep -E -q 'value="(启用|确认|停用|刷新)"' "$page"; then
+    fail "page still has the confirm-timer buttons"
+fi
 if grep -q 'Phase 1' "$page"; then
     fail "page still has the phase 1 note"
 fi
@@ -586,3 +598,4 @@ if [ -s "$work/which.log" ]; then
 fi
 
 echo "safety: ok"
+rm -rf "$work"

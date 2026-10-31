@@ -101,7 +101,7 @@ honk_set_status() {
     local runtime="$1"
     local detail="$2"
     case $runtime in
-        off|armed|confirmed|refused) ;;
+        off|on|armed|confirmed|refused) ;;
         *) return 0 ;;
     esac
     case $detail in
@@ -611,30 +611,30 @@ honk_arm() {
         honk_disarm apply_failed
         return 1
     fi
-    minutes=$(honk_minutes)
-    now=$(date +%s)
-    printf '%s\n' "$((now + minutes * 60))" >"$(honk_state honk.deadline)"
     printf '0\n' >"$(honk_state honk.pingfails)"
+    : >"$(honk_state honk.confirmed)"
+    rm -f "$(honk_state honk.deadline)"
     trap '' HUP
     "$HONK_SCRIPT_DIR/honk-watch.sh" >>"$(honk_state honk.log)" 2>&1 &
     printf '%s\n' "$!" >"$(honk_state honk.watch.pid)"
     : >"$(honk_state honk.armed)"
-    honk_set_status armed armed
-    honk_log "armed port $port"
+    honk_set_status on running
+    honk_log "started port $port"
 }
 
 honk_confirm() {
+    # Confirm step removed; doona manages config. Keep for old UI hooks.
     if [ ! -f "$(honk_state honk.armed)" ]; then
         honk_set_status off not_armed
         return 1
     fi
     : >"$(honk_state honk.confirmed)"
-    honk_set_status confirmed confirmed
-    honk_log confirmed
+    honk_set_status on running
+    honk_log confirm_noop
 }
 
 honk_watch_step() {
-    local pid now deadline gw fails
+    local pid gw fails
     honk_pin_bins
     if [ ! -f "$(honk_state honk.armed)" ]; then
         return 0
@@ -647,14 +647,6 @@ honk_watch_step() {
     if ! honk_listening; then
         honk_disarm listener_down
         return 1
-    fi
-    if [ ! -f "$(honk_state honk.confirmed)" ]; then
-        now=$(date +%s)
-        deadline=$(cat "$(honk_state honk.deadline)" 2>/dev/null || echo 0)
-        if [ "$now" -ge "$deadline" ]; then
-            honk_disarm confirm_timeout
-            return 1
-        fi
     fi
     gw=$(cat "$(honk_state honk.gateway)" 2>/dev/null || true)
     if [ -n "$gw" ] && "$HONK_PING" -c 1 -W 2 "$gw" >/dev/null 2>&1; then
@@ -689,6 +681,7 @@ honk_watch_loop() {
         if [ "${HONK_WATCH_ONCE:-0}" = "1" ]; then
             exit 0
         fi
+        honk_trim_log 2>/dev/null || true
         sleep "$HONK_WATCH_INTERVAL"
     done
 }
@@ -707,6 +700,11 @@ honk_nat_start() {
     if ! honk_apply; then
         honk_disarm apply_failed
     fi
+}
+
+honk_restart() {
+    honk_disarm restart
+    honk_arm
 }
 
 honk_boot() {
@@ -969,4 +967,15 @@ honk_uninstall() {
     honk_settings_strip
     rm -rf "$HONK_PREFIX"
     honk_log uninstalled
+}
+
+# Cap /tmp/honk.log so it cannot fill RAM tmpfs unbounded.
+honk_trim_log() {
+    _log="$(honk_state honk.log)"
+    [ -f "$_log" ] || return 0
+    _sz=$(wc -c < "$_log" 2>/dev/null || echo 0)
+    # 512 KiB soft cap
+    if [ "$_sz" -gt 524288 ]; then
+        tail -c 262144 "$_log" > "$_log.trim" 2>/dev/null && mv -f "$_log.trim" "$_log"
+    fi
 }
