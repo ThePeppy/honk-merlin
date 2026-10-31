@@ -476,6 +476,46 @@ grep -q '^enable$' "$work/fc.log" || fail "flow cache was not restored"
 grep -q '^enable$' "$work/runner.log" || fail "runner was not restored"
 export HONK_BIN_DIRS="$saved_dirs"
 
+# Refresh signals the pid file. `honk-core reload` cannot see this process.
+# A shell waiting on sleep does not run its HUP trap until that sleep exits.
+: >"$work/hup.log"
+python3 -c 'import signal, sys, time
+path = sys.argv[1]
+def on_hup(*_):
+    with open(path, "a") as handle:
+        handle.write("hup\n")
+signal.signal(signal.SIGHUP, on_hup)
+with open(path, "a") as handle:
+    handle.write("ready\n")
+while True:
+    time.sleep(30)
+' "$work/hup.log" >/dev/null 2>&1 &
+huppid=$!
+i=0
+while [ "$i" -lt 50 ]; do
+    grep -q ready "$work/hup.log" && break
+    i=$((i + 1))
+    sleep 0.1
+done
+grep -q ready "$work/hup.log" || fail "refresh target did not start"
+printf '%s\n' "$huppid" >"$work/state/honk.pid"
+: >"$work/state/honk.armed"
+: >"$binlog"
+honk_refresh || fail "refresh failed"
+i=0
+while [ "$i" -lt 20 ]; do
+    grep -q hup "$work/hup.log" && break
+    i=$((i + 1))
+    sleep 0.1
+done
+grep -q hup "$work/hup.log" || fail "refresh did not signal the listener"
+if grep -q reload "$binlog"; then
+    fail "refresh invoked honk-core reload"
+fi
+kill "$huppid" >/dev/null 2>&1 || true
+wait "$huppid" >/dev/null 2>&1 || true
+rm -f "$work/state/honk.armed" "$work/state/honk.pid"
+
 # A flow cache that was already off stays off after disarm.
 : >"$work/fc.log"
 : >"$work/runner.log"

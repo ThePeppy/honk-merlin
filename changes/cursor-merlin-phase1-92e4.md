@@ -9,3 +9,4 @@ Added
 - Enable starts upstream `honk-core` with `--redirect` on the LAN address. iptables REDIRECT covers other IPv4 TCP. UDP is not redirected, and DNS stays on dnsmasq. Private destinations, the router itself, and TCP ports 53 and 9090 are returned before REDIRECT.
 - While Honk is armed, Broadcom flow cache and runner are disabled and flushed, then restored to the state recorded at arm.
 - The addon archive includes a static aarch64 `honk-core` without eBPF, a pre-seeded zashboard UI, and `geoip.dat` / `geosite.dat`. Subscriptions use honk's own client, which accepts a base64 `ss://` list.
+- Refresh sends SIGHUP to the listener pid file. The redirect build does not take the eBPF instance lock, so `honk-core reload` cannot see that process.

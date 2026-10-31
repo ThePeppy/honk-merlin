@@ -560,12 +560,19 @@ honk_log_file() {
 }
 
 honk_refresh() {
+    local pid
     honk_export_config
-    if [ ! -f "$(honk_state honk.armed)" ] || [ ! -x "$HONK_BIN" ] || [ -z "${HONK_CONFIG:-}" ]; then
+    if [ ! -f "$(honk_state honk.armed)" ] || [ -z "${HONK_CONFIG:-}" ]; then
         honk_log not_armed
         return 1
     fi
-    "$HONK_BIN" -c "$HONK_CONFIG" reload >>"$(honk_state honk.log)" 2>&1 || return 1
+    # Redirect runs without the eBPF instance lock, so `honk-core reload`
+    # cannot find the daemon. SIGHUP is the signal that subcommand sends.
+    pid=$(cat "$(honk_state honk.pid)" 2>/dev/null || true)
+    if [ -z "$pid" ] || ! kill -HUP "$pid" >/dev/null 2>&1; then
+        honk_log_file refresh_failed
+        return 1
+    fi
     honk_log refreshed
 }
 
