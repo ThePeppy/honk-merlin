@@ -131,6 +131,44 @@ ipv4     2 tcp      6 119 TIME_WAIT src=10.66.0.1 dst=10.66.0.1 sport=33664 dpor
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn conntrack_delete_returns_when_the_tool_hangs() {
+    let dir = std::env::temp_dir().join(format!("honk-ct-hang-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let proc_path = dir.join("nf_conntrack");
+    std::fs::write(
+        &proc_path,
+        "ipv4     2 tcp      6 119 TIME_WAIT src=10.66.0.2 dst=9.9.9.9 sport=33714 dport=443 src=10.66.0.1 dst=10.66.0.2 sport=39527 dport=33714 [ASSURED] mark=0 zone=0 use=2\n",
+    )
+    .unwrap();
+    let fake = dir.join("conntrack");
+    std::fs::write(&fake, "#!/bin/sh\nexec sleep 30\n").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = std::fs::metadata(&fake).unwrap().permissions();
+        perms.set_mode(0o755);
+        std::fs::set_permissions(&fake, perms).unwrap();
+    }
+    let started = std::time::Instant::now();
+    let output = bin()
+        .arg("conntrack-delete")
+        .arg("--listen-ip")
+        .arg("10.66.0.1")
+        .arg("--proc")
+        .arg(&proc_path)
+        .env("HONK_CONNTRACK", &fake)
+        .env("HONK_CONNTRACK_DEADLINE_MS", "400")
+        .output()
+        .unwrap();
+    assert!(started.elapsed().as_secs() < 3, "delete did not time out");
+    assert!(!output.status.success());
+    let err = String::from_utf8_lossy(&output.stderr);
+    assert!(err.contains("timed out"), "{err}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 struct Facts {
     path: std::path::PathBuf,
     keep: bool,

@@ -11,6 +11,7 @@
 - Merlin 树里的 `release/src-rt-5.04behnd.4916/kernel/linux-4.19/config_base.6a.6813` 文件头是 `Linux/arm64 4.19.294`。其中 `CONFIG_BPF=y`，但 `CONFIG_BPF_SYSCALL`、`CONFIG_CGROUPS`、`CONFIG_NAMESPACES` 都未打开。`CONFIG_IP_NF_TARGET_REDIRECT=y`。`CONFIG_NETFILTER_XT_TARGET_TPROXY=m`，同时 `CONFIG_NF_TPROXY_IPV4` 未打开，所以不能把 TPROXY 当成可用。`CONFIG_TUN=m`。`CONFIG_NF_CT_NETLINK=y`，`CONFIG_IKCONFIG_PROC=y`。
 - 插件页用的是 Merlin `helper.sh` 的 `am_get_webui_page` / `am_settings_set`，以及 `services-start`、`nat-start`、`firewall-start`、`service-event`。当前 `menuTree.js` 里没有 `Tools_OtherSettings.asp`。页签插在只出现一次的 `url: "Advanced_System_Content.asp"` 后面。3006.102 的 `menuTree.js` 用数字词典，例如 `<#613#>`，不要求 `<#menu5_6_2#>`。这一行不是恰好一次时，安装记 `menu_anchor_not_found` 并且不会报 `installed`。
 - `service-event` 里的 ash 没有 `command`，裸文件名的 `[ -x ]` 也不会搜 PATH。conntrack、iptables、ip、nvram、ping、curl、logger 在 `/usr/sbin`、`/usr/bin`、`/sbin`、`/opt/sbin`、`/opt/bin` 里按绝对路径查找。Enable 被拒绝时，页面重新载入并显示原因，例如 conntrack 不可用。
+- 存在 `config.dae` 时，Enable 会先用直连 curl 拉取订阅，再把 `--config` 传给监听进程。拉取失败就不会挂上 nat 跳转。日志里有 `config loaded`（节点、组、规则数量）和每条连接的 `decision`。解除时先停监听和看门狗，conntrack 删除最多等几秒。honk-core 自带 Clash API，但这个数据面不包含它，所以不会监听 9090。
 
 CPU 是 aarch64。交叉编译目标是 `aarch64-unknown-linux-musl`。
 

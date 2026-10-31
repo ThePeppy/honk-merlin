@@ -17,10 +17,38 @@ pub async fn read_prelude(stream: &mut tokio::net::TcpStream) -> Vec<u8> {
     }
 }
 
-pub fn sniff_domain(buf: &[u8]) -> Option<String> {
-    sni(buf)
-        .or_else(|| http_host(buf))
-        .map(|name| name.trim_end_matches('.').to_string())
+pub struct Sniffed {
+    pub sni: Option<String>,
+    pub host: Option<String>,
+}
+
+impl Sniffed {
+    pub fn domain(&self) -> Option<String> {
+        self.sni.clone().or_else(|| self.host.clone())
+    }
+}
+
+pub fn sniff_parts(buf: &[u8]) -> Sniffed {
+    if let Some(name) = sni(buf) {
+        Sniffed {
+            sni: Some(clean(name)),
+            host: None,
+        }
+    } else if let Some(name) = http_host(buf) {
+        Sniffed {
+            sni: None,
+            host: Some(clean(name)),
+        }
+    } else {
+        Sniffed {
+            sni: None,
+            host: None,
+        }
+    }
+}
+
+fn clean(name: String) -> String {
+    name.trim_end_matches('.').to_string()
 }
 
 fn sni(buf: &[u8]) -> Option<String> {
@@ -127,12 +155,12 @@ mod tests {
         hello[6] = (hs_len >> 16) as u8;
         hello[7] = (hs_len >> 8) as u8;
         hello[8] = hs_len as u8;
-        assert_eq!(sniff_domain(&hello).as_deref(), Some("example.com"));
+        assert_eq!(sniff_parts(&hello).domain().as_deref(), Some("example.com"));
     }
 
     #[test]
     fn reads_http_host_without_port() {
         let raw = b"GET / HTTP/1.1\r\nHost: Example.COM:80\r\n\r\n";
-        assert_eq!(sniff_domain(raw).as_deref(), Some("Example.COM"));
+        assert_eq!(sniff_parts(raw).domain().as_deref(), Some("Example.COM"));
     }
 }

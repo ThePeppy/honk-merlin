@@ -5,7 +5,7 @@
 //! PREROUTING without `HONK_PRE`.
 
 use std::io;
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use thiserror::Error;
 
@@ -21,7 +21,19 @@ pub struct SystemRunner;
 
 impl Runner for SystemRunner {
     fn run(&self, argv: &Argv) -> Result<i32, io::Error> {
-        let status = Command::new(&argv.program).args(&argv.args).status()?;
+        let mut command = Command::new(&argv.program);
+        command.args(&argv.args);
+        // -N/-D/-C/-F/-X miss when the chain or jump is not there yet.
+        // iptables writes that miss to stderr; the caller already treats it
+        // as the signal to create or append.
+        if argv
+            .args
+            .iter()
+            .any(|arg| matches!(arg.as_str(), "-N" | "-D" | "-C" | "-F" | "-X"))
+        {
+            command.stderr(Stdio::null());
+        }
+        let status = command.status()?;
         Ok(status.code().unwrap_or(1))
     }
 }

@@ -17,6 +17,13 @@ use crate::relay::{OriginalDestination, RelayPlan, plan_relay, relay_direct};
 
 const MAX_CONNECTIONS: usize = 256;
 
+#[derive(Clone)]
+pub struct ProxyPaths {
+    pub config: std::path::PathBuf,
+    pub cache: Option<std::path::PathBuf>,
+    pub selections: std::path::PathBuf,
+}
+
 #[derive(Debug, Error)]
 pub enum ListenError {
     #[error("listen address {0} is not an ipv4 primary address")]
@@ -52,6 +59,7 @@ impl OriginalDestination for NixOriginalDest {
 pub async fn serve<L>(
     plan: RedirectPlan,
     ready: &Path,
+    proxy: Option<ProxyPaths>,
     lookup: L,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<(), ListenError>
@@ -88,6 +96,7 @@ where
                 };
                 let lookup = Arc::clone(&lookup);
                 let excluded = excluded.clone();
+                let proxy = proxy.clone();
                 tokio::spawn(async move {
                     let _permit = permit;
                     let decision = {
@@ -98,16 +107,12 @@ where
                     if let RelayPlan::Direct(dest) = decision {
                         let peer = stream.peer_addr().unwrap_or(dest);
                         let mut stream = stream;
-                        let result = if let Some(path) = crate::route::config_file() {
-                            let cache = std::env::var_os("HONK_NODE_CACHE").map(std::path::PathBuf::from);
-                            let selections = std::env::var_os("HONK_SELECTIONS")
-                                .map(std::path::PathBuf::from)
-                                .unwrap_or_else(|| path.with_file_name("select.txt"));
+                        let result = if let Some(proxy) = proxy {
                             let prelude = crate::sniff::read_prelude(&mut stream).await;
                             crate::route::handle(
-                                &path,
-                                cache.as_deref(),
-                                &selections,
+                                &proxy.config,
+                                proxy.cache.as_deref(),
+                                &proxy.selections,
                                 stream,
                                 dest,
                                 peer,
@@ -115,6 +120,7 @@ where
                             )
                             .await
                         } else {
+                            eprintln!("honk-dataplane: decision direct-copy dest={dest}");
                             relay_direct(stream, dest).await
                         };
                         if let Err(error) = result {

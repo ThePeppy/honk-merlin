@@ -112,7 +112,27 @@ case "\$cmd" in
         fi
         while :; do sleep 30; done
         ;;
-    conntrack-delete) exit 0 ;;
+    conntrack-delete)
+        if [ -f "$work/conntrack.hang" ]; then
+            sleep 60
+        fi
+        exit 0
+        ;;
+    subscription-url)
+        if [ -f "$work/sub.url" ]; then
+            cat "$work/sub.url"
+        fi
+        exit 0
+        ;;
+    summary)
+        if [ -f "$work/summary.fail" ]; then
+            echo "subscription produced no shadowsocks nodes" >&2
+            exit 1
+        fi
+        printf '%s\n' 'config loaded path=config.dae mode=600 uid=0 nodes=72 groups=21 rules=6'
+        exit 0
+        ;;
+    import-surge) exit 0 ;;
     constants)
         printf '%s\n' 'chain=HONK_PRE'
         printf '%s\n' 'table=nat'
@@ -399,6 +419,63 @@ fi
 [ "$(grep -c 'tabName: "Honk"' "$work/menu-install-tmp.js")" = 1 ] || fail "install did not leave one Honk tab"
 grep -A1 'tabName: "<#613#>"' "$work/menu-install-tmp.js" | grep -q 'tabName: "Honk"' || fail "Honk tab was not inserted after the System page"
 grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu-install-tmp.js" || fail "install treated the exclude list as the anchor"
+
+# A present config is passed to the listener. A failed subscription fetch
+# must not fall through to direct copy.
+mkdir -p "$HONK_PREFIX" "$work/root/usr/bin"
+printf '%s\n' 'routing { fallback: direct }' >"$HONK_PREFIX/config.dae"
+chmod 600 "$HONK_PREFIX/config.dae"
+printf '%s\n' 'http://127.0.0.1:9/sub' >"$work/sub.url"
+cat >"$work/root/usr/bin/curl" <<'EOF'
+#!/bin/sh
+echo "curl: (7) Failed to connect" >&2
+exit 7
+EOF
+chmod 755 "$work/root/usr/bin/curl"
+saved_dirs=$HONK_BIN_DIRS
+export HONK_BIN_DIRS="$work/root/usr/bin"
+: >"$binlog"
+rm -f "$work/state/honk.log"
+if "$scripts/honk-arm.sh"; then
+    fail "arm succeeded after a subscription failure"
+fi
+grep -q subscription_fetch_failed "$work/state/honk.log" || fail "fetch failure was not logged"
+if grep -q '^listen' "$binlog"; then
+    fail "listen started after a subscription failure"
+fi
+if grep -q '^apply' "$binlog"; then
+    fail "apply ran after a subscription failure"
+fi
+rm -f "$work/sub.url"
+export HONK_BIN_DIRS="$saved_dirs"
+: >"$binlog"
+rm -f "$work/state/honk.log"
+"$scripts/honk-arm.sh" || fail "arm with a config file failed"
+grep -q -- '--config' "$binlog" || fail "listen did not receive --config"
+grep -q 'config loaded' "$work/state/honk.log" || fail "config summary missing"
+grep -q 'nodes=72' "$work/state/honk.log" || fail "node count missing"
+"$scripts/honk-disarm.sh"
+
+# Disarm kills the listener and watcher even when conntrack delete hangs.
+sleep 60 &
+listener=$!
+sleep 60 &
+watcher=$!
+printf '%s\n' "$listener" >"$work/state/honk.pid"
+printf '%s\n' "$watcher" >"$work/state/honk.watch.pid"
+printf '%s\n' 'primary_ip=192.168.50.1' >"$work/state/honk.facts"
+touch "$work/conntrack.hang"
+started=$(date +%s)
+honk_disarm manual
+elapsed=$(( $(date +%s) - started ))
+rm -f "$work/conntrack.hang"
+[ "$elapsed" -lt 15 ] || fail "disarm hung for ${elapsed}s"
+if kill -0 "$listener" >/dev/null 2>&1; then
+    fail "listener survived disarm"
+fi
+if kill -0 "$watcher" >/dev/null 2>&1; then
+    fail "watcher survived disarm"
+fi
 
 if [ -s "$work/command.log" ]; then
     fail "a router script invoked command"

@@ -122,7 +122,7 @@ honk_unlink() {
 }
 
 honk_conntrack_delete() {
-    local facts primary
+    local facts primary child i
     facts=$(honk_state honk.facts)
     if [ ! -x "$HONK_BIN" ] || [ ! -f "$facts" ]; then
         honk_log conntrack_skipped
@@ -132,30 +132,77 @@ honk_conntrack_delete() {
     case $primary in
         ''|*[!0-9.]*) return 0 ;;
     esac
-    if ! "$HONK_BIN" conntrack-delete --listen-ip "$primary"; then
-        honk_log conntrack_delete_failed
-        return 0
-    fi
+    "$HONK_BIN" conntrack-delete --listen-ip "$primary" &
+    child=$!
+    i=0
+    while [ "$i" -lt 8 ]; do
+        if ! kill -0 "$child" >/dev/null 2>&1; then
+            wait "$child" || honk_log conntrack_delete_failed
+            return 0
+        fi
+        sleep 1
+        i=$((i + 1))
+    done
+    kill "$child" >/dev/null 2>&1 || true
+    sleep 1
+    kill -9 "$child" >/dev/null 2>&1 || true
+    wait "$child" >/dev/null 2>&1 || true
+    honk_log conntrack_delete_timeout
+    return 0
+}
+
+honk_kill_pid() {
+    local pid="$1"
+    local i="0"
+    [ -n "$pid" ] || return 0
+    kill "$pid" >/dev/null 2>&1 || true
+    while [ "$i" -lt 2 ]; do
+        kill -0 "$pid" >/dev/null 2>&1 || return 0
+        i=$((i + 1))
+        sleep 1
+    done
+    kill -9 "$pid" >/dev/null 2>&1 || true
+}
+
+honk_stop_pidfile() {
+    local file="$1"
+    local pid
+    [ -f "$file" ] || return 0
+    pid=$(cat "$file" 2>/dev/null || true)
+    rm -f "$file"
+    honk_kill_pid "$pid"
+}
+
+honk_stop_named() {
+    local pid cmd
+    for pid in /proc/[0-9]*; do
+        pid=${pid#/proc/}
+        case $pid in
+            ''|*[!0-9]*) continue ;;
+        esac
+        [ "$pid" = "$$" ] && continue
+        cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
+        case $cmd in
+            *honk-dataplane*|*honk-watch.sh*)
+                honk_kill_pid "$pid"
+                ;;
+        esac
+    done
 }
 
 honk_stop_listener() {
-    local pidfile pid
-    pidfile=$(honk_state honk.pid)
-    if [ -f "$pidfile" ]; then
-        pid=$(cat "$pidfile" 2>/dev/null || true)
-        if [ -n "$pid" ]; then
-            kill "$pid" >/dev/null 2>&1 || true
-        fi
-    fi
-    rm -f "$(honk_state honk.pid)" "$(honk_state honk.ready)"
+    honk_stop_pidfile "$(honk_state honk.pid)"
+    honk_stop_pidfile "$(honk_state honk.watch.pid)"
+    honk_stop_named
+    rm -f "$(honk_state honk.ready)"
 }
 
 honk_disarm() {
     local reason="${1:-disarmed}"
     honk_pin_bins
     honk_unlink
-    honk_conntrack_delete
     honk_stop_listener
+    honk_conntrack_delete
     rm -f \
         "$(honk_state honk.armed)" \
         "$(honk_state honk.confirmed)" \
@@ -290,8 +337,58 @@ honk_write_selections() {
     mv "$tmp" "$HONK_PREFIX/select.txt"
 }
 
+honk_log_file() {
+    honk_log "$*"
+    mkdir -p "$HONK_STATE_DIR"
+    printf '%s\n' "honk: $*" >> "$(honk_state honk.log)"
+}
+
+honk_fetch_subscription() {
+    local url="$1"
+    local curl err regex
+    honk_pin_bins
+    curl=$(honk_resolve curl || true)
+    if [ -z "$curl" ]; then
+        honk_log_file need_curl
+        return 1
+    fi
+    err=$(honk_state honk.curl.err)
+    if ! "$curl" -fsSL --max-time 30 -o "$(honk_state honk.sub)" "$url" 2>"$err"; then
+        honk_log_file "subscription_fetch_failed $(tr '\n' ' ' <"$err")"
+        return 1
+    fi
+    regex=$(sed -n 's/^# merlin-policy-regex://p' "$HONK_CONFIG" | head -n 1)
+    if ! "$HONK_BIN" import-surge --input "$(honk_state honk.sub)" --regex "$regex" --out "$HONK_NODE_CACHE"; then
+        honk_log_file subscription_parse_failed
+        return 1
+    fi
+    return 0
+}
+
+honk_prepare_proxy() {
+    local url
+    honk_export_config
+    if [ ! -f "$HONK_PREFIX/config.dae" ]; then
+        honk_log_file "config absent direct-copy"
+        return 0
+    fi
+    url=$("$HONK_BIN" subscription-url --config "$HONK_CONFIG" || true)
+    if [ -n "$url" ]; then
+        if ! honk_fetch_subscription "$url"; then
+            honk_set_status refused need_subscription
+            return 1
+        fi
+    fi
+    if ! "$HONK_BIN" summary --config "$HONK_CONFIG" --cache "$HONK_NODE_CACHE" --selections "$HONK_SELECTIONS" >>"$(honk_state honk.log)" 2>&1; then
+        honk_log_file need_config
+        honk_set_status refused need_config
+        return 1
+    fi
+    return 0
+}
+
 honk_refresh() {
-    local url regex tmp fragment page curl
+    local url fragment page
     honk_pin_bins
     honk_export_config
     [ -n "${HONK_CONFIG:-}" ] || return 1
@@ -299,15 +396,7 @@ honk_refresh() {
     honk_write_selections || true
     url=$("$HONK_BIN" subscription-url --config "$HONK_CONFIG" || true)
     [ -n "$url" ] || return 1
-    regex=$(sed -n 's/^# merlin-policy-regex://p' "$HONK_CONFIG" | head -n 1)
-    tmp=$(honk_state honk.sub)
-    curl=$(honk_resolve curl || true)
-    if [ -z "$curl" ]; then
-        honk_log need_curl
-        return 1
-    fi
-    "$curl" -fsSL --max-time 30 -o "$tmp" "$url" || return 1
-    "$HONK_BIN" import-surge --input "$tmp" --regex "$regex" --out "$HONK_NODE_CACHE" || return 1
+    honk_fetch_subscription "$url" || return 1
     fragment=$(honk_state honk.groups)
     if [ -f "$HONK_NODE_CACHE" ]; then
         "$HONK_BIN" ui-fragment --config "$HONK_CONFIG" --cache "$HONK_NODE_CACHE" --selections "$HONK_SELECTIONS" >"$fragment" || return 1
@@ -347,7 +436,14 @@ honk_arm() {
     if ! honk_gather_facts; then
         return 1
     fi
-    "$HONK_BIN" listen --facts "$(honk_state honk.facts)" --ready "$(honk_state honk.ready)" >>"$(honk_state honk.log)" 2>&1 &
+    if ! honk_prepare_proxy; then
+        return 1
+    fi
+    if [ -f "${HONK_CONFIG:-}" ]; then
+        "$HONK_BIN" listen --facts "$(honk_state honk.facts)" --ready "$(honk_state honk.ready)" --config "$HONK_CONFIG" --cache "$HONK_NODE_CACHE" --selections "$HONK_SELECTIONS" >>"$(honk_state honk.log)" 2>&1 &
+    else
+        "$HONK_BIN" listen --facts "$(honk_state honk.facts)" --ready "$(honk_state honk.ready)" >>"$(honk_state honk.log)" 2>&1 &
+    fi
     pid=$!
     printf '%s\n' "$pid" >"$(honk_state honk.pid)"
     if ! honk_wait_listen; then
@@ -360,6 +456,7 @@ honk_arm() {
     printf '0\n' >"$(honk_state honk.pingfails)"
     trap '' HUP
     "$HONK_SCRIPT_DIR/honk-watch.sh" >>"$(honk_state honk.log)" 2>&1 &
+    printf '%s\n' "$!" >"$(honk_state honk.watch.pid)"
     : >"$(honk_state honk.armed)"
     if ! "$HONK_BIN" apply --facts "$(honk_state honk.facts)"; then
         honk_disarm apply_failed

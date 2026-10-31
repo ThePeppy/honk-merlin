@@ -7,7 +7,9 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
-use std::path::{Path, PathBuf};
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
 use std::sync::Mutex;
 
 use honk_config::parser::parse_dae_config;
@@ -44,6 +46,52 @@ struct Loaded {
 
 pub struct Decision {
     pub kind: DecisionKind,
+    pub sni: String,
+    pub host: String,
+    pub rule: String,
+    pub group: String,
+    pub node: String,
+}
+
+#[derive(Debug)]
+pub struct ConfigReport {
+    pub nodes: usize,
+    pub groups: usize,
+    pub rules: usize,
+    pub mode: u32,
+    pub uid: u32,
+    pub subscription: bool,
+}
+
+impl ConfigReport {
+    pub fn log_line(&self, path: &Path) -> String {
+        format!(
+            "config loaded path={} mode={:03o} uid={} nodes={} groups={} rules={}",
+            path.display(),
+            self.mode,
+            self.uid,
+            self.nodes,
+            self.groups,
+            self.rules
+        )
+    }
+}
+
+impl Decision {
+    pub fn log_line(&self) -> String {
+        format!(
+            "decision sni={} host={} rule={} group={} node={}",
+            field(&self.sni),
+            field(&self.host),
+            field(&self.rule),
+            field(&self.group),
+            field(&self.node)
+        )
+    }
+}
+
+fn field(value: &str) -> &str {
+    if value.is_empty() { "-" } else { value }
 }
 
 pub enum DecisionKind {
@@ -58,16 +106,52 @@ pub enum DecisionKind {
 
 static LOADED: Mutex<Option<(u128, Loaded)>> = Mutex::new(None);
 
-pub fn config_file() -> Option<PathBuf> {
-    let path = std::env::var_os("HONK_CONFIG")?;
-    let path = PathBuf::from(path);
-    path.is_file().then_some(path)
+pub fn load_configured(
+    path: &Path,
+    cache: Option<&Path>,
+    selections: &Path,
+) -> anyhow::Result<ConfigReport> {
+    let meta = std::fs::metadata(path)?;
+    let text = std::fs::read_to_string(path)?;
+    let config = parse_dae_config(&text)?;
+    let loaded = build_loaded(&text, cache, selections)?;
+    let report = ConfigReport {
+        nodes: loaded.nodes.len(),
+        groups: loaded.groups.len(),
+        rules: loaded.rules.len(),
+        mode: meta.permissions().mode() & 0o777,
+        uid: file_uid(&meta),
+        subscription: !config.subscriptions.is_empty(),
+    };
+    if report.subscription && report.nodes == 0 {
+        anyhow::bail!("subscription produced no shadowsocks nodes");
+    }
+    *LOADED.lock().expect("route lock") = Some((0, loaded));
+    Ok(report)
+}
+
+fn file_uid(meta: &std::fs::Metadata) -> u32 {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::MetadataExt::uid(meta)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = meta;
+        0
+    }
 }
 
 pub fn reload(path: &Path, cache: Option<&Path>, selections: &Path) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(path)?;
-    let config = parse_dae_config(&text)?;
-    let notes = notes(&text);
+    let loaded = build_loaded(&text, cache, selections)?;
+    *LOADED.lock().expect("route lock") = Some((0, loaded));
+    Ok(())
+}
+
+fn build_loaded(text: &str, cache: Option<&Path>, selections: &Path) -> anyhow::Result<Loaded> {
+    let config = parse_dae_config(text)?;
+    let notes = notes(text);
     let mut nodes = HashMap::new();
     let mut order = Vec::new();
     if let Some(cache) = cache.filter(|path| path.is_file()) {
@@ -138,16 +222,14 @@ pub fn reload(path: &Path, cache: Option<&Path>, selections: &Path) -> anyhow::R
         }
         groups.insert(group.name.clone(), members);
     }
-    let loaded = Loaded {
+    Ok(Loaded {
         rules: config.routing.rules.clone(),
         fallback: config.routing.default_outbound.clone(),
         groups,
         defaults,
         nodes,
         order,
-    };
-    *LOADED.lock().expect("route lock") = Some((0, loaded));
-    Ok(())
+    })
 }
 
 fn push_node(nodes: &mut HashMap<String, Node>, order: &mut Vec<String>, node: SurgeNode) {
@@ -257,16 +339,36 @@ pub fn decide(
     cache: Option<&Path>,
     selections: &Path,
     query: &Query,
+    sni: &str,
+    host: &str,
 ) -> anyhow::Result<Decision> {
     if LOADED.lock().expect("route lock").is_none() {
         reload(path, cache, selections)?;
     }
     let guard = LOADED.lock().expect("route lock");
     let loaded = &guard.as_ref().expect("loaded").1;
-    let target = match_target(loaded, query);
-    Ok(Decision {
-        kind: resolve(loaded, &target, 0).unwrap_or(DecisionKind::Block),
-    })
+    Ok(explain(loaded, query, sni, host))
+}
+
+fn explain(loaded: &Loaded, query: &Query, sni: &str, host: &str) -> Decision {
+    let (target, rule) = match_rule(loaded, query);
+    let group = if loaded.groups.contains_key(&target) {
+        target.clone()
+    } else {
+        String::new()
+    };
+    let leaf = resolve(loaded, &target, 0).unwrap_or(Leaf {
+        kind: DecisionKind::Block,
+        node: "block".to_string(),
+    });
+    Decision {
+        kind: leaf.kind,
+        sni: sni.to_string(),
+        host: host.to_string(),
+        rule,
+        group,
+        node: leaf.node,
+    }
 }
 
 pub struct Query {
@@ -275,13 +377,62 @@ pub struct Query {
     pub src: SocketAddr,
 }
 
-fn match_target(loaded: &Loaded, query: &Query) -> String {
+fn match_rule(loaded: &Loaded, query: &Query) -> (String, String) {
     for rule in &loaded.rules {
         if rule_matches(&rule.condition, query) {
-            return rule.outbound.as_str().to_string();
+            let label = format!(
+                "{}->{}",
+                matched_label(&rule.condition, query),
+                rule.outbound.as_str()
+            );
+            return (rule.outbound.as_str().to_string(), label);
         }
     }
-    loaded.fallback.clone()
+    (
+        loaded.fallback.clone(),
+        format!("fallback->{}", loaded.fallback),
+    )
+}
+
+fn matched_label(condition: &RoutingCondition, query: &Query) -> String {
+    if let Some(domain) = query.domain.as_deref() {
+        if let Some(item) = condition
+            .domain
+            .iter()
+            .find(|item| item.eq_ignore_ascii_case(domain))
+        {
+            return format!("domain(full:{item})");
+        }
+        if let Some(item) = condition
+            .domain_suffix
+            .iter()
+            .find(|item| suffix_match(domain, item))
+        {
+            return format!("domain(suffix:{item})");
+        }
+        if let Some(item) = condition.domain_keyword.iter().find(|item| {
+            domain
+                .to_ascii_lowercase()
+                .contains(&item.to_ascii_lowercase())
+        }) {
+            return format!("domain(keyword:{item})");
+        }
+    }
+    if let Some(item) = condition
+        .ip
+        .iter()
+        .find(|item| cidr_contains(item, query.dest.ip()))
+    {
+        return format!("dip({item})");
+    }
+    if let Some(item) = condition
+        .port
+        .iter()
+        .find(|item| port_item(item, query.dest.port()))
+    {
+        return format!("dport({item})");
+    }
+    "match".to_string()
 }
 
 fn rule_matches(condition: &RoutingCondition, query: &Query) -> bool {
@@ -423,13 +574,27 @@ fn proto_ok(protocol: &[String]) -> bool {
     protocol.is_empty() || protocol.iter().any(|item| item.eq_ignore_ascii_case("tcp"))
 }
 
-fn resolve(loaded: &Loaded, target: &str, depth: u8) -> Option<DecisionKind> {
+struct Leaf {
+    kind: DecisionKind,
+    node: String,
+}
+
+fn resolve(loaded: &Loaded, target: &str, depth: u8) -> Option<Leaf> {
     if depth > 8 {
-        return Some(DecisionKind::Block);
+        return Some(Leaf {
+            kind: DecisionKind::Block,
+            node: "block".to_string(),
+        });
     }
     match target {
-        "direct" => Some(DecisionKind::Direct),
-        "block" => Some(DecisionKind::Block),
+        "direct" => Some(Leaf {
+            kind: DecisionKind::Direct,
+            node: "direct".to_string(),
+        }),
+        "block" => Some(Leaf {
+            kind: DecisionKind::Block,
+            node: "block".to_string(),
+        }),
         name => {
             if loaded.groups.contains_key(name) {
                 let members = loaded.groups.get(name)?;
@@ -443,16 +608,28 @@ fn resolve(loaded: &Loaded, target: &str, depth: u8) -> Option<DecisionKind> {
                     .and_then(|choice| find_member(loaded, members, choice))
                     .or_else(|| members.first().cloned());
                 return match member? {
-                    Member::Direct => Some(DecisionKind::Direct),
-                    Member::Block => Some(DecisionKind::Block),
-                    Member::Pool => loaded
-                        .order
-                        .first()
-                        .and_then(|node| loaded.nodes.get(node).map(proxy_node)),
+                    Member::Direct => Some(Leaf {
+                        kind: DecisionKind::Direct,
+                        node: "direct".to_string(),
+                    }),
+                    Member::Block => Some(Leaf {
+                        kind: DecisionKind::Block,
+                        node: "block".to_string(),
+                    }),
+                    Member::Pool => {
+                        let node = loaded.order.first()?;
+                        Some(Leaf {
+                            kind: proxy_node(loaded.nodes.get(node)?),
+                            node: node.clone(),
+                        })
+                    }
                     Member::Name(member) => resolve(loaded, &member, depth + 1),
                 };
             }
-            loaded.nodes.get(name).map(proxy_node)
+            loaded.nodes.get(name).map(|node| Leaf {
+                kind: proxy_node(node),
+                node: name.to_string(),
+            })
         }
     }
 }
@@ -512,7 +689,8 @@ pub async fn handle(
     src: SocketAddr,
     prelude: Vec<u8>,
 ) -> std::io::Result<()> {
-    let domain = crate::sniff::sniff_domain(&prelude);
+    let sniffed = crate::sniff::sniff_parts(&prelude);
+    let domain = sniffed.domain();
     let decision = decide(
         path,
         cache,
@@ -522,8 +700,11 @@ pub async fn handle(
             dest,
             src,
         },
+        sniffed.sni.as_deref().unwrap_or(""),
+        sniffed.host.as_deref().unwrap_or(""),
     )
     .map_err(|error| std::io::Error::other(error.to_string()))?;
+    eprintln!("honk-dataplane: {}", decision.log_line());
     match decision.kind {
         DecisionKind::Block => Ok(()),
         DecisionKind::Direct => direct_with_prelude(stream, dest, &prelude).await,
@@ -650,36 +831,39 @@ node {
         let dest = "203.0.113.9:443".parse().unwrap();
         let src = "192.168.50.20:40000".parse().unwrap();
         assert_eq!(
-            match_target(
+            match_rule(
                 &loaded,
                 &Query {
                     domain: Some("a.example.com".into()),
                     dest,
                     src
                 }
-            ),
+            )
+            .0,
             "Netflix"
         );
         assert_eq!(
-            match_target(
+            match_rule(
                 &loaded,
                 &Query {
                     domain: None,
                     dest: "198.51.100.9:443".parse().unwrap(),
                     src
                 }
-            ),
+            )
+            .0,
             "direct"
         );
         assert_eq!(
-            match_target(
+            match_rule(
                 &loaded,
                 &Query {
                     domain: None,
                     dest,
                     src
                 }
-            ),
+            )
+            .0,
             "Proxies"
         );
     }
@@ -701,6 +885,94 @@ node {
             dest: "1.1.1.1:443".parse().unwrap(),
             src: "192.168.50.2:9".parse().unwrap(),
         };
-        assert_eq!(match_target(&loaded, &query), "Proxies");
+        assert_eq!(match_rule(&loaded, &query).0, "Proxies");
+    }
+
+    #[test]
+    fn decision_names_the_sni_rule_group_and_node() {
+        let text = r#"
+routing {
+    domain(suffix: 'example.com') -> Netflix
+    fallback: Proxies
+}
+group {
+    Netflix {
+        filter: name('Alpha')
+        policy: select
+        default: 'Alpha'
+    }
+}
+node {
+    'Alpha': 'ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpmYWtl@203.0.113.20:8388'
+}
+"#;
+        let loaded =
+            super::build_loaded(text, None, std::path::Path::new("/no/such/select.txt")).unwrap();
+        let decision = super::explain(
+            &loaded,
+            &Query {
+                domain: Some("a.example.com".into()),
+                dest: "203.0.113.9:443".parse().unwrap(),
+                src: "192.168.50.20:40000".parse().unwrap(),
+            },
+            "a.example.com",
+            "",
+        );
+        assert!(matches!(decision.kind, DecisionKind::Proxy { .. }));
+        assert_eq!(
+            decision.log_line(),
+            "decision sni=a.example.com host=- rule=domain(suffix:example.com)->Netflix group=Netflix node=Alpha"
+        );
+    }
+
+    #[test]
+    fn owner_mode_600_config_is_readable() {
+        let dir = std::env::temp_dir().join(format!("honk-mode-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.dae");
+        std::fs::write(&path, "routing {\n fallback: direct\n}\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&path).unwrap().permissions();
+            perms.set_mode(0o600);
+            std::fs::set_permissions(&path, perms).unwrap();
+        }
+        let report = load_configured(&path, None, &dir.join("select.txt")).unwrap();
+        assert_eq!(report.mode & 0o777, 0o600);
+        let line = report.log_line(&path);
+        assert!(line.contains("mode=600"), "{line}");
+        assert!(line.contains("nodes=0"), "{line}");
+        assert!(!report.subscription);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_subscription_without_nodes_is_refused() {
+        let dir = std::env::temp_dir().join(format!("honk-sub-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.dae");
+        std::fs::write(
+            &path,
+            "subscription {\n airport: 'https://example.test/a'\n}\nrouting {\n fallback: direct\n}\n",
+        )
+        .unwrap();
+        let error = load_configured(&path, None, &dir.join("select.txt")).unwrap_err();
+        assert!(
+            error.to_string().contains("no shadowsocks nodes"),
+            "{error}"
+        );
+        let cache = dir.join("nodes.cache");
+        std::fs::write(
+            &cache,
+            "Alpha = ss, 203.0.113.20, 8388, encrypt-method=chacha20-ietf-poly1305, password=fake\n",
+        )
+        .unwrap();
+        let report = load_configured(&path, Some(&cache), &dir.join("select.txt")).unwrap();
+        assert_eq!(report.nodes, 1);
+        assert!(report.subscription);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

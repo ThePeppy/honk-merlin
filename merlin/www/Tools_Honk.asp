@@ -49,7 +49,9 @@ var honkRefusal = {
 	need_gateway: "No WAN gateway was found. 没有找到 WAN 网关。",
 	need_primary: "The LAN primary address does not match lan_ipaddr. 局域网主地址与 lan_ipaddr 不一致。",
 	need_facts: "The redirect plan was refused. 重定向计划被拒绝。",
-	need_curl: "curl was not found, so the subscription was not refreshed. 没有找到 curl，订阅没有刷新。"
+	need_curl: "curl was not found, so the subscription was not refreshed. 没有找到 curl，订阅没有刷新。",
+	need_subscription: "The subscription could not be fetched, so interception was not enabled. 订阅下载失败，因此没有开始拦截。",
+	need_config: "The config did not load, so interception was not enabled. 配置没有载入，因此没有开始拦截。"
 };
 
 function honkNote(runtime, detail) {
@@ -144,6 +146,7 @@ function submitHonk(action) {
 										<div class="formfontdesc">Phase 1 listens on the LAN address and copies TCP to the original destination. It does not dial a proxy node. Interception stays off after every boot until Enable is pressed on this page. Keep an SSH session open. If LAN web access fails, wait for the confirm timer or run the uninstall script.</div>
 										<div class="formfontdesc">第一阶段只把局域网 IPv4 TCP 转到原始目的地址，不使用代理节点。每次开机都不会拦截，必须在本页点击 Enable。请保持一个 SSH 会话。如果网页打不开，等待确认倒计时结束，或执行卸载脚本。</div>
 										<div id="honk_note" class="formfontdesc" style="color:#FC0;"></div>
+										<div class="formfontdesc">honk-core can serve a Clash dashboard when experimental.clash_api.external_controller is set. This addon runs honk-dataplane only, so nothing listens on port 9090. honk-core 的 Clash 面板属于 honk-core 进程；本插件只运行 honk-dataplane，不会打开 9090。</div>
 
 										<table width="100%" border="1" align="center" cellpadding="4" cellspacing="0" bordercolor="#6b8fa3" class="FormTable">
 											<thead>

@@ -27,10 +27,10 @@ pub use conntrack::{ConntrackDelete, ConntrackTuple, conntrack_deletes, parse_co
 pub use facts::{
     KernelFacts, MerlinAction, PreferredBackend, config_flag, merlin_action, preferred_backend,
 };
-pub use listen::{ListenError, NixOriginalDest, serve, tcp_listening};
+pub use listen::{ListenError, NixOriginalDest, ProxyPaths, serve, tcp_listening};
 pub use outbound::dial_honk_outbound;
 pub use relay::{OriginalDestination, RelayPlan, plan_relay, relay_direct};
-pub use route::ui_rows;
+pub use route::{load_configured, ui_rows};
 pub use surge::filter_body as surge_filter;
 
 pub const NAT_TABLE: &str = "nat";
