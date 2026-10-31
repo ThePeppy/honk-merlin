@@ -37,7 +37,9 @@ jobs:
       - name: Test the dataplane crate
         run: cargo test -p honk-dataplane
       - name: Test addon scripts
-        run: bash merlin/tests/safety.sh
+        run: |
+          bash merlin/tests/safety.sh
+          python3 merlin/tools/test_surge2honk.py
       - name: aarch64 linker
         run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
       - name: Static musl binary
@@ -46,3 +48,8 @@ jobs:
             cargo build -p honk-dataplane --release --target aarch64-unknown-linux-musl
           file target/aarch64-unknown-linux-musl/release/honk-dataplane
           file target/aarch64-unknown-linux-musl/release/honk-dataplane | grep -q 'statically linked'
+          sh merlin/build.sh
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: honk-be88u
+          path: merlin/dist/honk-be88u.tar.gz

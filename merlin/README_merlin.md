@@ -64,6 +64,19 @@ flowchart TD
 - 路由器上的 ping 不经过这条 PREROUTING 规则，它不能证明局域网电脑还能上网。确认按钮才是人工检查。
 - 卸载脚本不依赖二进制也能摘链。它只删 `custom_settings.txt` 里 `honk_` 开头的行。
 
+## 从 Surge 生成配置
+
+在 Mac 上，不把真实订阅写进 git：
+
+```sh
+python3 merlin/tools/surge2honk.py profile.conf -o config.dae \
+  --subscription-file='https://机场地址/list=./list.txt'
+```
+
+`--fetch` 才会去下载 `policy-path`。摘要打在标准错误，例如 `nodes=3 groups=2 rules=6 ...`。把 `config.dae` 放到路由器的 `/jffs/addons/honk/config.dae`。管理页的 Refresh 用路由器上的 `curl` 再拉一次订阅，写成 `nodes.cache`。没有 `config.dae` 时仍是第一阶段的直连拷贝。
+
+域名不改 dnsmasq：只看 TLS SNI 或明文 HTTP 的 Host。UDP 不代理。`GEOIP` / `geosite` 规则留在文件里，但这一阶段没有数据库，所以不会命中。
+
 ## 编译
 
 在仓库根目录：
