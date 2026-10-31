@@ -15,9 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  addon:
+  build-be88u:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,21 +29,6 @@ jobs:
         with:
           toolchain: ${{ steps.toolchain.outputs.stable }}
           targets: aarch64-unknown-linux-musl
-          components: rustfmt, clippy
-      - name: Check formatting
-        run: cargo fmt -p honk-dataplane -p honk-core -- --check
-      - name: Clippy
-        run: |
-          cargo clippy -p honk-dataplane --all-targets -- -D warnings
-          cargo clippy -p honk-core --all-targets --features redirect -- -D warnings
-      - name: Test
-        run: |
-          cargo test -p honk-dataplane
-          cargo test -p honk-core --features redirect --lib -- redirect:: userspace_tcp
-      - name: Test addon scripts
-        run: |
-          bash merlin/tests/safety.sh
-          python3 merlin/tools/test_surge2honk.py
       - name: boring-sys and zig
         run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
       - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
@@ -55,3 +40,32 @@ jobs:
         with:
           name: honk-be88u
           path: merlin/dist/honk-be88u.tar.gz
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Read Rust toolchain
+        id: toolchain
+        run: echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.stable }}
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt -p honk-dataplane -p honk-core -- --check
+      - name: Clippy
+        run: |
+          cargo clippy -p honk-dataplane --all-targets -- -D warnings
+          cargo clippy -p honk-core --all-targets --features redirect -- -D warnings
+      - name: Test
+        run: |
+          cargo test -p honk-dataplane -- --test-threads=8
+          cargo test -p honk-core --features redirect --lib -- --test-threads=8 redirect:: userspace_tcp
+      - name: Test addon scripts
+        run: |
+          bash merlin/tests/safety.sh
+          python3 merlin/tools/test_surge2honk.py
