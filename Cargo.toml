@@ -8,6 +8,7 @@ members = [
     "crates/honk-outbound",
     "crates/honk-core",
     "crates/honk-tool",
+    "crates/honk-dataplane",
 ]
 exclude = ["crates/honk-ebpf", "fuzz"]
 

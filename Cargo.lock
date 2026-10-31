@@ -1651,6 +1651,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "honk-dataplane"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "nix 0.31.3",
+ "thiserror",
+ "tokio",
+]
+
+[[package]]
 name = "honk-ebpf-common"
 version = "0.1.0"
 dependencies = [

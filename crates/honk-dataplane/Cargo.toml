@@ -1,0 +1,17 @@
+[package]
+name = "honk-dataplane"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "honk-dataplane"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+nix = { version = "0.31", default-features = false, features = ["net", "socket"] }
+thiserror.workspace = true
+tokio.workspace = true
