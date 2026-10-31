@@ -15,9 +15,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dataplane:
+  addon:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -31,24 +31,26 @@ jobs:
           targets: aarch64-unknown-linux-musl
           components: rustfmt, clippy
       - name: Check formatting
-        run: cargo fmt -p honk-dataplane -- --check
+        run: cargo fmt -p honk-dataplane -p honk-core -- --check
       - name: Clippy
-        run: cargo clippy -p honk-dataplane --all-targets -- -D warnings
-      - name: Test the dataplane crate
-        run: cargo test -p honk-dataplane
+        run: |
+          cargo clippy -p honk-dataplane --all-targets -- -D warnings
+          cargo clippy -p honk-core --all-targets --features redirect -- -D warnings
+      - name: Test
+        run: |
+          cargo test -p honk-dataplane
+          cargo test -p honk-core --features redirect --lib -- redirect:: userspace_tcp
       - name: Test addon scripts
         run: |
           bash merlin/tests/safety.sh
           python3 merlin/tools/test_surge2honk.py
-      - name: aarch64 linker
-        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu
-      - name: Static musl binary
-        run: |
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc \
-            cargo build -p honk-dataplane --release --target aarch64-unknown-linux-musl
-          file target/aarch64-unknown-linux-musl/release/honk-dataplane
-          file target/aarch64-unknown-linux-musl/release/honk-dataplane | grep -q 'statically linked'
-          sh merlin/build.sh
+      - name: boring-sys and zig
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev pkg-config
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2
+        with:
+          version: 0.14.1
+      - name: Static musl honk-core
+        run: sh merlin/build.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: honk-be88u

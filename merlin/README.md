@@ -10,6 +10,21 @@ Public sources used for the target, not a session on the router:
 - Merlin's router Makefile: `HND_ROUTER_BE_4916` uses Linux 4.19.235 unless `ASUSWRT_BRCM_SDK_VERSION` is `WIFI7_SDK_20250506`, which selects 5.15.167.
 - `config_base.6a.6813` is headed `Linux/arm64 4.19.294`. `CONFIG_BPF_SYSCALL`, cgroups, and namespaces are off. REDIRECT is built in. The TPROXY target is modular while `CONFIG_NF_TPROXY_IPV4` is off, so TPROXY is not treated as available. TUN is a module.
 
-`python3 merlin/tools/surge2honk.py profile.conf -o config.dae` writes a dae file. See `docs/merlin-config.md` for the schema. `merlin/build.sh` produces a static `aarch64-unknown-linux-musl` tarball. Install does not intercept. Every boot clears the nat jump. Enable refuses unless the model is RT-BE88U, `sw_mode` is 1, `conntrack -C` works, a WAN gateway is present, and the LAN interface primary address matches `lan_ipaddr`. conntrack and the other router tools are found by absolute path under `/usr/sbin`, `/usr/bin`, `/sbin`, `/opt/sbin`, and `/opt/bin`. A refusal is shown on the page after it reloads. When `config.dae` exists, Enable fetches its subscription with direct curl (`User-Agent: Surge`) and passes `--config` to the listener. The body may be Surge lines or a plain or base64 list of SIP002 `ss://` links; the log records the detected format and node count. A failed fetch does not install the nat jump. Disarm kills the listener and watcher by pid file and the dataplane executable path, before a bounded conntrack delete. honk-core's Clash API is not part of this dataplane, so port 9090 is not opened. The confirm timer, a dead listener, or repeated gateway ping failures unlink the chain, delete only the conntrack entries whose reply half is the listen socket, and stop the process. Uninstall also unlinks when the binary is missing.
+`python3 merlin/tools/surge2honk.py profile.conf -o config.dae` writes a dae file. See `docs/merlin-config.md` for the schema. `merlin/build.sh` produces a static `aarch64-unknown-linux-musl` `honk-core` (features `clash-api`, `mimalloc`, `rprx`, `redirect`; no `ebpf`), a pre-seeded zashboard tree, and `geoip.dat` / `geosite.dat`. Install does not intercept. Every boot clears the nat jump and does not start the listener.
 
-Not in this phase: honk-outbound dialling, UDP, TUN, TPROXY, launching eBPF, IPv6, guest bridges, and any nvram change to Broadcom flow cache. This repository has no LuCI tree.
+Enable refuses unless `config.dae` exists, the model is RT-BE88U, `sw_mode` is 1, `conntrack -C` works, a WAN gateway is present, and the LAN interface primary address matches `lan_ipaddr`. It then runs `honk-core -c config.dae --redirect <lan-ip>:<tproxy_port>` with `DAE_LOCATION_ASSET` pointed at the addon directory. honk-core fetches subscriptions itself, with its own user agent, and accepts a base64 list of `ss://` links. The nat chain returns router addresses, the LAN prefix, TCP ports 53 and 9090, and `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `100.64.0.0/10` before one REDIRECT. While armed, `/bin/fc` and `/bin/runner` are disabled and flushed when they exist; disarm restores the state recorded at arm. Disarm kills only the listener and watcher pid files, then deletes conntrack entries whose reply source is the listener. UDP is not redirected. DNS stays on dnsmasq.
+
+Add this block to the existing `config.dae` (an empty secret means the LAN can call the API):
+
+```dae
+experimental {
+    clash_api {
+        external_controller: '192.168.2.1:9090'
+        external_ui: '/jffs/addons/honk/ui'
+    }
+}
+```
+
+The panel is `http://192.168.2.1:9090/ui/`.
+
+Not in this phase: UDP, TUN, TPROXY, launching eBPF, IPv6, and guest bridges. Flow cache is suspended only while armed; nvram is not edited. This repository has no LuCI tree.

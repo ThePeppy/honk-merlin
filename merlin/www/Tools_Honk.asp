@@ -9,7 +9,7 @@
 <meta HTTP-EQUIV="Expires" CONTENT="-1">
 <link rel="shortcut icon" href="images/favicon.png">
 <link rel="icon" href="images/favicon.png">
-<title><#Web_Title#> - Honk</title>
+<title>Honk 代理</title>
 <link rel="stylesheet" type="text/css" href="index_style.css">
 <link rel="stylesheet" type="text/css" href="form_style.css">
 <link rel="stylesheet" type="text/css" href="css/icon.css">
@@ -42,26 +42,50 @@ function honkText(id, value) {
 	node.appendChild(document.createTextNode(value));
 }
 
-var honkRefusal = {
-	need_conntrack: "Conntrack is not usable, so interception was not enabled. conntrack 不可用，因此没有开始拦截。",
-	need_model: "This addon only runs on an RT-BE88U. 仅支持 RT-BE88U。",
-	need_sw_mode: "Router mode is required. 需要路由模式 (sw_mode 1)。",
-	need_gateway: "No WAN gateway was found. 没有找到 WAN 网关。",
-	need_primary: "The LAN primary address does not match lan_ipaddr. 局域网主地址与 lan_ipaddr 不一致。",
-	need_facts: "The redirect plan was refused. 重定向计划被拒绝。",
-	need_curl: "curl was not found, so the subscription was not refreshed. 没有找到 curl，订阅没有刷新。",
-	need_subscription: "The subscription could not be fetched, so interception was not enabled. 订阅下载失败，因此没有开始拦截。",
-	need_config: "The config did not load, so interception was not enabled. 配置没有载入，因此没有开始拦截。"
+var honkRuntime = {
+	off: "关闭",
+	armed: "已启用",
+	confirmed: "已确认",
+	refused: "未启用"
 };
+
+var honkDetail = {
+	boot_off: "开机未启用",
+	armed: "等待确认",
+	confirmed: "已确认",
+	off: "关闭",
+	stopped: "已停用",
+	restart: "正在重新启用",
+	uninstalled: "已卸载",
+	not_armed: "尚未启用",
+	listener_down: "监听已停止，已恢复",
+	confirm_timeout: "未在时限内确认，已恢复",
+	ping_failed: "网关不通，已恢复",
+	apply_failed: "规则未能生效，已恢复",
+	need_conntrack: "conntrack 不可用，因此没有开始拦截。",
+	need_model: "仅支持 RT-BE88U。",
+	need_sw_mode: "需要路由模式。",
+	need_gateway: "没有找到 WAN 网关。",
+	need_primary: "局域网主地址与 lan_ipaddr 不一致。",
+	need_facts: "重定向计划被拒绝。",
+	need_curl: "没有找到 curl，订阅没有刷新。",
+	need_subscription: "订阅下载失败，因此没有开始拦截。",
+	need_config: "配置没有载入，因此没有开始拦截。"
+};
+
+function honkLabel(table, value) {
+	var known = table[value];
+	if (known) {
+		return known;
+	}
+	return value;
+}
 
 function honkNote(runtime, detail) {
 	if (runtime !== "refused") {
 		return "";
 	}
-	if (honkRefusal[detail]) {
-		return honkRefusal[detail];
-	}
-	return detail;
+	return honkLabel(honkDetail, detail);
 }
 
 function initial() {
@@ -73,8 +97,8 @@ function initial() {
 	var runtime = honkSafe(db.honk_runtime) || "off";
 	var detail = honkSafe(db.honk_detail) || "boot_off";
 	var minutes = honkSafe(db.honk_confirm_minutes) || "5";
-	honkText("honk_runtime", runtime);
-	honkText("honk_detail", detail);
+	honkText("honk_runtime", honkLabel(honkRuntime, runtime));
+	honkText("honk_detail", honkLabel(honkDetail, detail));
 	honkText("honk_note", honkNote(runtime, detail));
 	var select = document.getElementById("honk_confirm_minutes");
 	if (select && /^(1|2|5|10|15|30)$/.test(minutes)) {
@@ -141,61 +165,58 @@ function submitHonk(action) {
 								<td bgcolor="#4D595D" valign="top">
 									<div class="container">
 										<div>&nbsp;</div>
-										<div class="formfonttitle"><#menu5_6#> - Honk</div>
+										<div class="formfonttitle">Honk 代理</div>
 										<div style="margin:10px 0 10px 5px;" class="splitLine"></div>
-										<div class="formfontdesc">Phase 1 listens on the LAN address and copies TCP to the original destination. It does not dial a proxy node. Interception stays off after every boot until Enable is pressed on this page. Keep an SSH session open. If LAN web access fails, wait for the confirm timer or run the uninstall script.</div>
-										<div class="formfontdesc">第一阶段只把局域网 IPv4 TCP 转到原始目的地址，不使用代理节点。每次开机都不会拦截，必须在本页点击 Enable。请保持一个 SSH 会话。如果网页打不开，等待确认倒计时结束，或执行卸载脚本。</div>
-										<div id="honk_note" class="formfontdesc" style="color:#FC0;"></div>
-										<div class="formfontdesc">honk-core can serve a Clash dashboard when experimental.clash_api.external_controller is set. This addon runs honk-dataplane only, so nothing listens on port 9090. honk-core 的 Clash 面板属于 honk-core 进程；本插件只运行 honk-dataplane，不会打开 9090。</div>
+										<div class="formfontdesc">Honk 接管局域网的 TCP 连接，并按配置中的规则分流。</div>
+										<div class="formfontdesc">点启用开始。启用后请在下方设定的分钟内点确认。点停用可立即恢复。每次开机都不会自动启用；超时未确认也会自动恢复。</div>
+										<div id="honk_note" class="formfontdesc"></div>
 
 										<table width="100%" border="1" align="center" cellpadding="4" cellspacing="0" bordercolor="#6b8fa3" class="FormTable">
 											<thead>
 												<tr>
-													<td colspan="2">Honk</td>
+													<td colspan="2">状态</td>
 												</tr>
 											</thead>
 											<tr>
-												<th width="40%">Runtime</th>
-												<td id="honk_runtime">off</td>
+												<th width="40%">运行</th>
+												<td id="honk_runtime">关闭</td>
 											</tr>
 											<tr>
-												<th>Detail</th>
-												<td id="honk_detail">boot_off</td>
+												<th>详情</th>
+												<td id="honk_detail">开机未启用</td>
 											</tr>
 											<tr>
-												<th>Listen</th>
-												<td>LAN primary address, TCP 39527</td>
+												<th>监听</th>
+												<td>局域网地址，TCP 端口与 tproxy_port 相同（未写时为 12345）。UDP 不经过 Honk。</td>
 											</tr>
-											<!-- honk-groups-begin -->
 											<tr>
-												<th>Groups</th>
-												<td>Copy config.dae into the addon directory, then press Refresh.</td>
+												<th width="40%">策略组</th>
+												<td>在面板中选择各策略组的节点。<a href="http://192.168.2.1:9090/ui/">打开面板</a></td>
 											</tr>
-											<!-- honk-groups-end -->
 											<tr>
-												<th>Config</th>
+												<th>配置</th>
 												<td>/jffs/addons/honk/config.dae</td>
 											</tr>
 											<tr>
-												<th>Confirm within minutes</th>
+												<th>确认时间（分钟）</th>
 												<td>
 													<select id="honk_confirm_minutes" class="input_option">
-														<option value="1">1</option>
-														<option value="2">2</option>
-														<option value="5" selected>5</option>
-														<option value="10">10</option>
-														<option value="15">15</option>
-														<option value="30">30</option>
+														<option value="1">1 分钟</option>
+														<option value="2">2 分钟</option>
+														<option value="5" selected>5 分钟</option>
+														<option value="10">10 分钟</option>
+														<option value="15">15 分钟</option>
+														<option value="30">30 分钟</option>
 													</select>
 												</td>
 											</tr>
 										</table>
 
 										<div class="apply_gen">
-											<input type="button" class="button_gen" onclick="submitHonk('start_honk');" value="Enable"/>
-											<input type="button" class="button_gen" onclick="submitHonk('start_honkconfirm');" value="Confirm"/>
-											<input type="button" class="button_gen" onclick="submitHonk('stop_honk');" value="Disable"/>
-											<input type="button" class="button_gen" onclick="submitHonk('start_honkrefresh');" value="Refresh"/>
+											<input type="button" class="button_gen" onclick="submitHonk('start_honk');" value="启用"/>
+											<input type="button" class="button_gen" onclick="submitHonk('start_honkconfirm');" value="确认"/>
+											<input type="button" class="button_gen" onclick="submitHonk('stop_honk');" value="停用"/>
+											<input type="button" class="button_gen" onclick="submitHonk('start_honkrefresh');" value="刷新"/>
 										</div>
 									</div>
 								</td>

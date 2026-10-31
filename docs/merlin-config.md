@@ -188,10 +188,25 @@ routing {
 | `FINAL` | `fallback:` |
 | `PROCESS-NAME`、`USER-AGENT`、`URL-REGEX` 以及其它不认识的类型 | 丢掉，并在摘要里计数 |
 
+## 面板
+
+在现有 `config.dae` 末尾加上（密钥留空时，局域网里的人可以调用这个 API）：
+
+```dae
+experimental {
+    clash_api {
+        external_controller: '192.168.2.1:9090'
+        external_ui: '/jffs/addons/honk/ui'
+    }
+}
+```
+
+面板地址是 `http://192.168.2.1:9090/ui/`。安装包里已经放好 zashboard，所以不必再从 GitHub 下载。策略组在面板里选。
+
 ## Merlin 插件这一阶段不做什么
 
-- 不改 dnsmasq。域名只来自 TLS ClientHello 的 SNI 或明文 HTTP 的 Host。嗅探不到就只按 IP、端口和 fallback 匹配。
-- UDP 不进 REDIRECT，所以 QUIC 不会被代理。
-- `dip(geoip:...)` 和 `domain(geosite:...)` 会原样写进文件，但插件没有 geoip.dat / geosite.dat，这些条件目前不会命中。后面的规则和 fallback 继续生效。
-- 除 `chacha20-ietf-poly1305` 以外的节点会拒绝这条连接，不会改成直连。
-- 没有 `config.dae` 时，行为仍是第一阶段的直连拷贝。
+- 不改 dnsmasq。UDP 不进 REDIRECT，所以 QUIC 和普通 DNS 仍走 dnsmasq。发往路由器的 TCP 53 也会在 REDIRECT 之前 RETURN。
+- 安装包带有 `geoip.dat` 和 `geosite.dat`。启动时 `DAE_LOCATION_ASSET` 指向 `/jffs/addons/honk`，`dip(geoip:...)` 和 `domain(geosite:...)` 可以离线命中。
+- 发往 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`、`100.64.0.0/10` 以及路由器自己地址的 TCP，在进入 honk 之前就 RETURN。
+- 没有 `config.dae` 时不会启用。订阅由 honk-core 自己拉取，使用它的默认 User-Agent，内容是 base64 的 `ss://` 列表。
+- 启用期间会 `fc disable` 并 `fc flush`（有 `runner` 时同样 disable），停用时恢复启用前的状态。

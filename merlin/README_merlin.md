@@ -1,6 +1,6 @@
 # honk on RT-BE88U（Asuswrt-Merlin）
 
-这是把 honk 接到 RT-BE88U 的第一阶段。硬件加速不是目标。eBPF 数据面留在 `honk-core` 里，本插件在 Broadcom 4.19 上只安装 IPv4 TCP 的 iptables REDIRECT，并把连接直接转到原始目的地址。
+这是把上游 `honk-core` 接到 RT-BE88U 的插件。eBPF 不参与。Broadcom 4.19 上由 iptables 把局域网的 IPv4 TCP REDIRECT 到 `honk-core --redirect`，再按 `config.dae` 里的规则、策略组和节点转发。UDP 不拦截。启用期间会关掉 Broadcom flow cache，停用时恢复。
 
 ## 已核对的平台
 
@@ -11,7 +11,7 @@
 - Merlin 树里的 `release/src-rt-5.04behnd.4916/kernel/linux-4.19/config_base.6a.6813` 文件头是 `Linux/arm64 4.19.294`。其中 `CONFIG_BPF=y`，但 `CONFIG_BPF_SYSCALL`、`CONFIG_CGROUPS`、`CONFIG_NAMESPACES` 都未打开。`CONFIG_IP_NF_TARGET_REDIRECT=y`。`CONFIG_NETFILTER_XT_TARGET_TPROXY=m`，同时 `CONFIG_NF_TPROXY_IPV4` 未打开，所以不能把 TPROXY 当成可用。`CONFIG_TUN=m`。`CONFIG_NF_CT_NETLINK=y`，`CONFIG_IKCONFIG_PROC=y`。
 - 插件页用的是 Merlin `helper.sh` 的 `am_get_webui_page` / `am_settings_set`，以及 `services-start`、`nat-start`、`firewall-start`、`service-event`。当前 `menuTree.js` 里没有 `Tools_OtherSettings.asp`。页签插在只出现一次的 `url: "Advanced_System_Content.asp"` 后面。3006.102 的 `menuTree.js` 用数字词典，例如 `<#613#>`，不要求 `<#menu5_6_2#>`。这一行不是恰好一次时，安装记 `menu_anchor_not_found` 并且不会报 `installed`。
 - `service-event` 里的 ash 没有 `command`，裸文件名的 `[ -x ]` 也不会搜 PATH。conntrack、iptables、ip、nvram、ping、curl、logger 在 `/usr/sbin`、`/usr/bin`、`/sbin`、`/opt/sbin`、`/opt/bin` 里按绝对路径查找。Enable 被拒绝时，页面重新载入并显示原因，例如 conntrack 不可用。
-- 存在 `config.dae` 时，Enable 会先用直连 curl 拉取订阅（`User-Agent: Surge`），再把 `--config` 传给监听进程。订阅可以是 Surge 行，也可以是纯文本或 base64 的 `ss://` SIP002 链接。日志记下识别到的格式和节点数。拉取失败就不会挂上 nat 跳转。日志里有 `config loaded`（节点、组、规则数量）和每条连接的 `decision`。解除时只按 pid 文件和数据面可执行文件的路径结束进程，conntrack 删除最多等几秒。honk-core 自带 Clash API，但这个数据面不包含它，所以不会监听 9090。
+- 必须已有 `config.dae`。Enable 启动 `honk-core -c config.dae --redirect <局域网地址>:<tproxy_port>`。订阅由 honk-core 用自己的 User-Agent 拉取，内容是 base64 的 `ss://` 列表。面板是 `http://192.168.2.1:9090/ui/`，安装包里已经放好界面文件。解除时只按 pid 文件结束监听和看门狗，conntrack 删除最多等几秒。
 
 CPU 是 aarch64。交叉编译目标是 `aarch64-unknown-linux-musl`。
 
@@ -23,11 +23,12 @@ flowchart TD
   boot --> off["摘掉 HONK_PRE，不启动进程"]
   enable["本页 Enable"] --> gate{"RT-BE88U、路由模式、conntrack、网关、br0 主地址"}
   gate -->|否| refuse["不改 PREROUTING"]
-  gate -->|是| listen["监听 LAN 主地址 TCP 39527"]
-  listen --> watch["看门狗"]
+  gate -->|是| listen["honk-core --redirect，端口默认 12345"]
+  listen --> fc["关掉 fc 和 runner 并 flush"]
+  fc --> watch["看门狗"]
   watch --> link["nat PREROUTING 末尾追加 HONK_PRE"]
-  link --> redir["仅 br0 的 IPv4 TCP，排除路由器、局域网、组播"]
-  redir --> copy["SO_ORIGINAL_DST 后直连原始目的地址"]
+  link --> redir["br0 的 IPv4 TCP；私网、路由器、53 和 9090 先 RETURN"]
+  redir --> copy["SO_ORIGINAL_DST 后进入 honk 的规则和出站"]
   watch --> roll["未确认、进程退出或网关 ping 连续失败"]
   roll --> flush["先摘链，再删这些 conntrack，最后停进程"]
 ```
@@ -75,9 +76,9 @@ python3 merlin/tools/surge2honk.py profile.conf -o config.dae \
   --subscription-file='https://机场地址/list=./list.txt'
 ```
 
-`--fetch` 才会去下载 `policy-path`。摘要打在标准错误，例如 `nodes=3 groups=2 rules=6 ...`。把 `config.dae` 放到路由器的 `/jffs/addons/honk/config.dae`。管理页的 Refresh 用路由器上的 `curl` 再拉一次订阅，写成 `nodes.cache`。没有 `config.dae` 时仍是第一阶段的直连拷贝。
+`--fetch` 才会去下载 `policy-path`。摘要打在标准错误，例如 `nodes=3 groups=2 rules=6 ...`。把 `config.dae` 放到路由器的 `/jffs/addons/honk/config.dae`，并加上 `experimental.clash_api`（见 `docs/merlin-config.md`）。管理页的刷新会让正在运行的 `honk-core` 重新加载。没有 `config.dae` 时不能启用。
 
-域名不改 dnsmasq：只看 TLS SNI 或明文 HTTP 的 Host。UDP 不代理。`GEOIP` / `geosite` 规则留在文件里，但这一阶段没有数据库，所以不会命中。
+域名解析仍交给 dnsmasq。UDP 不代理。安装包里的 `geoip.dat` 和 `geosite.dat` 给 `dip(geoip:...)` 和 `domain(geosite:...)` 用。
 
 ## 编译
 
@@ -87,7 +88,7 @@ python3 merlin/tools/surge2honk.py profile.conf -o config.dae \
 sh merlin/build.sh
 ```
 
-产物是 `merlin/dist/honk-be88u.tar.gz`。里面是静态 musl 的 `honk-dataplane`、脚本和管理页。
+产物是 `merlin/dist/honk-be88u.tar.gz`。里面是静态 musl 的 `honk-core`、zashboard、`geoip.dat`、`geosite.dat`、脚本和管理页。
 
 ## 在路由器上怎么试
 
@@ -97,15 +98,15 @@ sh merlin/build.sh
 2. 核对 `nvram get productid`、`nvram get sw_mode` 和 `uname -m`。型号应是 `RT-BE88U`，模式应是 `1`，架构应是 `aarch64`。
 3. 执行 `conntrack -C`。如果失败，先安装 conntrack 用户态工具再继续。没有它时 Enable 会拒绝，并且不会往 PREROUTING 加规则。
 4. 把压缩包解到 `/jffs/addons/honk`，执行 `sh /jffs/addons/honk/scripts/install.sh`。装完只应多一个管理页，局域网访问应当和安装前一样。
-5. 用另一台电脑打开 Administration - Honk。Runtime 应是 `off`。把确认时间改成 1 或 2 分钟。
-6. 点 Enable。再用那台局域网电脑打开一个网站。这一阶段应当仍打开原来的网站，而不是走到代理节点。
-7. 网站和 SSH 都正常时，点 Confirm。不正常就不要再点，等倒计时结束。看门狗会摘链、删除转到监听端口的 conntrack，然后停进程。
+5. 用另一台电脑打开 Administration - Honk。运行应是「关闭」。把确认时间改成 1 或 2 分钟。
+6. 点启用。再用那台局域网电脑打开一个直连站点和一个代理站点。直连应很快打开；代理走配置里的节点。面板是 `http://192.168.2.1:9090/ui/`。
+7. 网站和 SSH 都正常时，点确认。不正常就不要再点，等倒计时结束。看门狗会摘链、恢复 flow cache、删除转到监听端口的 conntrack，然后停进程。
 8. 也可以立刻执行 `sh /jffs/addons/honk/scripts/uninstall.sh`。重启之后拦截应再次关闭。
 
 ## 未决问题
 
 - 固件是否自带 `conntrack` 命令。内核有 `CONFIG_NF_CT_NETLINK`，用户态工具不一定在。
 - 更新的 SDK 可能把 BE88U 切到 5.15。探测能看出来，插件仍然不会加载 eBPF。
-- Broadcom flow cache 如果把转发从 netfilter 旁路掉，规则会装上但流量不变。本阶段故意不写 `fc` / `runner` 的 nvram。
+- 启用时执行 `fc disable` 和 `fc flush`（有 `runner` 就 disable），并记下之前是开还是关。停用时只在原先为开的情况下 `fc enable` 并 flush。不改 nvram。
 - 菜单锚点写死在当前 Merlin `main` 的管理页。锚点不是恰好一行时，安装不会改 `menuTree.js`。
-- 直连转发只适合确认“打开开关不会把网切断”。代理节点要等下一阶段把 `dial_honk_outbound` 接上。
+- UDP 仍然不经过 honk。QUIC 走原来的路径。

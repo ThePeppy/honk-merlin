@@ -77,6 +77,34 @@ if [ "\${1:-}" = -C ]; then
     fi
     exit 0
 fi
+if [ "\${1:-}" = -D ] && [ -f "$work/conntrack.hang" ]; then
+    sleep 60
+fi
+exit 0
+EOF
+
+cat >"$work/bin/fc" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$work/fc.log"
+if [ "\${1:-}" = status ]; then
+    if [ -f "$work/fc.off" ]; then
+        printf '%s\n' 'L2 & L3 Acceleration is Disabled'
+    else
+        printf '%s\n' 'L2 & L3 Acceleration is Enabled'
+    fi
+fi
+exit 0
+EOF
+cat >"$work/bin/runner" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$work/runner.log"
+if [ "\${1:-}" = status ]; then
+    if [ -f "$work/runner.off" ]; then
+        printf '%s\n' 'Runner is Disabled'
+    else
+        printf '%s\n' 'Runner is Enabled'
+    fi
+fi
 exit 0
 EOF
 
@@ -88,57 +116,14 @@ fi
 exit 0
 EOF
 
-cat >"$work/bin/honk-dataplane" <<EOF
+cat >"$work/bin/honk-core" <<EOF
 #!/bin/sh
 printf '%s\n' "\$*" >> "$binlog"
-cmd=\${1:-}
-shift || true
-case "\$cmd" in
-    plan) exit 0 ;;
-    apply) exit 0 ;;
-    check-listen) exit 0 ;;
-    listen)
-        ready=
-        while [ \$# -gt 0 ]; do
-            if [ "\$1" = --ready ]; then
-                ready=\$2
-                shift 2
-            else
-                shift
-            fi
-        done
-        if [ -n "\$ready" ]; then
-            printf '%s\n' '192.168.50.1:39527' > "\$ready"
-        fi
+for arg in "\$@"; do
+    if [ "\$arg" = --redirect ]; then
         while :; do sleep 30; done
-        ;;
-    conntrack-delete)
-        if [ -f "$work/conntrack.hang" ]; then
-            sleep 60
-        fi
-        exit 0
-        ;;
-    subscription-url)
-        if [ -f "$work/sub.url" ]; then
-            cat "$work/sub.url"
-        fi
-        exit 0
-        ;;
-    summary)
-        if [ -f "$work/summary.fail" ]; then
-            echo "subscription produced no shadowsocks nodes" >&2
-            exit 1
-        fi
-        printf '%s\n' 'config loaded path=config.dae mode=600 uid=0 nodes=72 groups=21 rules=6'
-        exit 0
-        ;;
-    import-surge) exit 0 ;;
-    constants)
-        printf '%s\n' 'chain=HONK_PRE'
-        printf '%s\n' 'table=nat'
-        printf '%s\n' 'port=39527'
-        ;;
-esac
+    fi
+done
 exit 0
 EOF
 
@@ -158,7 +143,10 @@ chmod 755 "$work/bin/"*
 export PATH="$work/bin:$PATH"
 export HONK_PREFIX="$work/prefix"
 export HONK_STATE_DIR="$work/state"
-export HONK_BIN="$work/bin/honk-dataplane"
+export HONK_BIN="$work/bin/honk-core"
+export HONK_ASSUME_LISTENING=1
+export HONK_FC="$work/bin/fc"
+export HONK_RUNNER="$work/bin/runner"
 export HONK_IPTABLES="$work/bin/iptables"
 export HONK_CONNTRACK="$work/bin/conntrack"
 export HONK_PING="$work/bin/ping"
@@ -182,11 +170,15 @@ if grep -v '^#' "$scripts/honk-firewall.sh" | grep -q iptables; then
     fail "firewall-start script mentions iptables"
 fi
 
-constants=$("$HONK_BIN" constants)
-printf '%s\n' "$constants" | grep -q 'chain=HONK_PRE' || fail "constants chain"
-printf '%s\n' "$constants" | grep -q 'port=39527' || fail "constants port"
 grep -q 'HONK_CHAIN=HONK_PRE' "$scripts/honk-common.sh" || fail "script chain drifted"
-grep -q 'HONK_LISTEN_PORT=39527' "$scripts/honk-common.sh" || fail "script port drifted"
+grep -q 'HONK_DEFAULT_TPROXY_PORT=12345' "$scripts/honk-common.sh" || fail "script port drifted"
+grep -q '192.168.0.0/16' "$scripts/honk-common.sh" || fail "private range missing"
+if grep -n -- '-A Surge' "$scripts"/*.sh; then
+    fail "router script sends User-Agent Surge"
+fi
+if grep -n honk_stop_binary "$scripts"/*.sh; then
+    fail "router script still scans processes"
+fi
 
 # shellcheck disable=SC1091
 . "$scripts/honk-common.sh"
@@ -200,7 +192,16 @@ fi
 page=$root/merlin/www/Tools_Honk.asp
 grep -q 'id="honk_note"' "$page" || fail "page has no refusal note"
 grep -q 'window.location.reload' "$page" || fail "page does not reload after apply"
-grep -q 'Conntrack is not usable' "$page" || fail "page does not explain need_conntrack"
+grep -q 'conntrack 不可用' "$page" || fail "page does not explain need_conntrack"
+grep -q 'Honk 代理' "$page" || fail "page title is not Chinese"
+grep -q 'http://192.168.2.1:9090/ui/' "$page" || fail "page has no panel link"
+grep -q '12345' "$page" || fail "page does not name the default port"
+if grep -q 'Phase 1' "$page"; then
+    fail "page still has the phase 1 note"
+fi
+if grep -q 'color:#FC0' "$page"; then
+    fail "page has a custom color"
+fi
 
 saved_ct=$HONK_CONNTRACK
 saved_dirs=$HONK_BIN_DIRS
@@ -251,13 +252,16 @@ rm -f "$work/state/honk.facts" "$work/state/honk.gateway"
 
 echo 0 >"$jump"
 : >"$iptlog"
+: >"$binlog"
+mkdir -p "$HONK_PREFIX"
+printf '%s\n' 'routing { fallback: direct }' >"$HONK_PREFIX/config.dae"
 touch "$work/conntrack.fail"
 if "$scripts/honk-arm.sh"; then
     fail "arm succeeded without conntrack"
 fi
 rm -f "$work/conntrack.fail"
-if grep -q '^apply' "$binlog"; then
-    fail "arm without conntrack called apply"
+if grep -q -- '--redirect' "$binlog"; then
+    fail "arm without conntrack started honk-core"
 fi
 if grep -q -- '-A PREROUTING' "$iptlog"; then
     fail "arm without conntrack linked PREROUTING"
@@ -342,8 +346,11 @@ printf '%s\n' "$(($(date +%s) + 600))" >"$work/state/honk.deadline"
 printf '%s\n' 0 >"$work/state/honk.pingfails"
 printf '%s\n' 192.168.1.1 >"$work/state/honk.gateway"
 : >"$binlog"
+: >"$iptlog"
+printf '%s\n' 'sw_mode=1' 'ifname=br0' 'lan_ip=192.168.50.1' 'lan_mask=255.255.255.0' 'primary_ip=192.168.50.1' 'local_ip=192.168.50.1' >"$work/state/honk.facts"
+printf '%s\n' 12345 >"$work/state/honk.port"
 "$scripts/honk-nat.sh"
-grep -q '^apply' "$binlog" || fail "armed nat-start did not re-apply"
+grep -q -- '-j REDIRECT' "$iptlog" || fail "armed nat-start did not re-apply"
 kill "$sleep_pid" >/dev/null 2>&1 || true
 
 # Confirmation suppresses only the timer. A dead listener still disarms.
@@ -420,41 +427,68 @@ fi
 grep -A1 'tabName: "<#613#>"' "$work/menu-install-tmp.js" | grep -q 'tabName: "Honk"' || fail "Honk tab was not inserted after the System page"
 grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu-install-tmp.js" || fail "install treated the exclude list as the anchor"
 
-# A present config is passed to the listener. A failed subscription fetch
-# must not fall through to direct copy.
+# A present config is passed to honk-core. The shell does not fetch the
+# subscription and does not send a Surge user agent.
 mkdir -p "$HONK_PREFIX" "$work/root/usr/bin"
 printf '%s\n' 'routing { fallback: direct }' >"$HONK_PREFIX/config.dae"
 chmod 600 "$HONK_PREFIX/config.dae"
-printf '%s\n' 'http://127.0.0.1:9/sub' >"$work/sub.url"
-cat >"$work/root/usr/bin/curl" <<'EOF'
+: >"$work/curl.log"
+cat >"$work/root/usr/bin/curl" <<EOF
 #!/bin/sh
-echo "curl: (7) Failed to connect" >&2
+printf '%s\n' "\$*" >> "$work/curl.log"
 exit 7
 EOF
 chmod 755 "$work/root/usr/bin/curl"
 saved_dirs=$HONK_BIN_DIRS
 export HONK_BIN_DIRS="$work/root/usr/bin"
 : >"$binlog"
-rm -f "$work/state/honk.log"
-if "$scripts/honk-arm.sh"; then
-    fail "arm succeeded after a subscription failure"
-fi
-grep -q subscription_fetch_failed "$work/state/honk.log" || fail "fetch failure was not logged"
-if grep -q '^listen' "$binlog"; then
-    fail "listen started after a subscription failure"
-fi
-if grep -q '^apply' "$binlog"; then
-    fail "apply ran after a subscription failure"
-fi
-rm -f "$work/sub.url"
-export HONK_BIN_DIRS="$saved_dirs"
-: >"$binlog"
+: >"$iptlog"
+: >"$work/fc.log"
+: >"$work/runner.log"
 rm -f "$work/state/honk.log"
 "$scripts/honk-arm.sh" || fail "arm with a config file failed"
-grep -q -- '--config' "$binlog" || fail "listen did not receive --config"
-grep -q 'config loaded' "$work/state/honk.log" || fail "config summary missing"
-grep -q 'nodes=72' "$work/state/honk.log" || fail "node count missing"
+grep -q -- '--redirect' "$binlog" || fail "honk-core was not started with --redirect"
+grep -q -- '-c' "$binlog" || fail "honk-core was not given the config"
+grep -q '192.168.50.1:' "$binlog" || fail "redirect address was not the LAN primary"
+grep -q -- '-j REDIRECT' "$iptlog" || fail "REDIRECT was not installed"
+grep -q -- '--to-ports 12345' "$iptlog" || fail "REDIRECT port was not 12345"
+grep -q '192.168.50.0/24' "$iptlog" || fail "LAN prefix was not excluded"
+grep -q -- '--dport 9090' "$iptlog" || fail "dashboard port was not excluded"
+grep -q -- '--dport 53' "$iptlog" || fail "DNS TCP was not excluded"
+grep -q '10.0.0.0/8' "$iptlog" || fail "10/8 was not excluded"
+grep -q '172.16.0.0/12' "$iptlog" || fail "172.16/12 was not excluded"
+grep -q '192.168.0.0/16' "$iptlog" || fail "192.168/16 was not excluded"
+grep -q '100.64.0.0/10' "$iptlog" || fail "CGNAT was not excluded"
+if grep -q ' OUTPUT ' "$iptlog"; then
+    fail "an OUTPUT rule was installed"
+fi
+if grep -q ' -I ' "$iptlog"; then
+    fail "a rule was inserted at the head"
+fi
+grep -q '^disable$' "$work/fc.log" || fail "flow cache was not disabled"
+grep -q '^flush$' "$work/fc.log" || fail "flow cache was not flushed"
+grep -q '^disable$' "$work/runner.log" || fail "runner was not disabled"
+if [ -s "$work/curl.log" ]; then
+    fail "the shell fetched a subscription"
+fi
 "$scripts/honk-disarm.sh"
+grep -q '^enable$' "$work/fc.log" || fail "flow cache was not restored"
+grep -q '^enable$' "$work/runner.log" || fail "runner was not restored"
+export HONK_BIN_DIRS="$saved_dirs"
+
+# A flow cache that was already off stays off after disarm.
+: >"$work/fc.log"
+: >"$work/runner.log"
+touch "$work/fc.off" "$work/runner.off"
+honk_fc_suspend
+honk_fc_restore
+if grep -q '^enable$' "$work/fc.log"; then
+    fail "a disabled flow cache was enabled"
+fi
+if grep -q '^enable$' "$work/runner.log"; then
+    fail "a disabled runner was enabled"
+fi
+rm -f "$work/fc.off" "$work/runner.off"
 
 # Disarm kills the listener and watcher even when conntrack delete hangs.
 sleep 60 &
@@ -477,7 +511,7 @@ if kill -0 "$watcher" >/dev/null 2>&1; then
     fail "watcher survived disarm"
 fi
 
-# A command line that merely contains honk must survive disarm.
+# Pid files are the only processes disarm may kill.
 sh -c 'sleep 40' honk-dataplane >/dev/null 2>&1 &
 decoy=$!
 sh -c 'sleep 40' 'sh /jffs/addons/honk/scripts/install.sh' >/dev/null 2>&1 &
@@ -485,7 +519,7 @@ sshish=$!
 cp /bin/sleep "$work/exact-bin"
 "$work/exact-bin" 40 >/dev/null 2>&1 &
 exact=$!
-HONK_BIN="$work/exact-bin" honk_stop_binary
+honk_disarm manual
 if kill -0 "$decoy" >/dev/null 2>&1; then
     :
 else
@@ -497,10 +531,12 @@ else
     fail "an install command line was killed"
 fi
 if kill -0 "$exact" >/dev/null 2>&1; then
-    fail "the dataplane binary was not killed"
+    :
+else
+    fail "a process outside the pid files was killed"
 fi
-kill "$decoy" "$sshish" >/dev/null 2>&1 || true
-wait "$decoy" "$sshish" >/dev/null 2>&1 || true
+kill "$decoy" "$sshish" "$exact" >/dev/null 2>&1 || true
+wait "$decoy" "$sshish" "$exact" >/dev/null 2>&1 || true
 
 if [ -s "$work/command.log" ]; then
     fail "a router script invoked command"

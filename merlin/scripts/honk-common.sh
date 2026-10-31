@@ -5,8 +5,10 @@
 
 HONK_PREFIX=${HONK_PREFIX:-/jffs/addons/honk}
 HONK_STATE_DIR=${HONK_STATE_DIR:-/tmp}
-HONK_BIN=${HONK_BIN:-$HONK_PREFIX/honk-dataplane}
+HONK_BIN=${HONK_BIN:-$HONK_PREFIX/honk-core}
 HONK_IPTABLES=${HONK_IPTABLES:-iptables}
+HONK_FC=${HONK_FC:-/bin/fc}
+HONK_RUNNER=${HONK_RUNNER:-/bin/runner}
 HONK_CONNTRACK=${HONK_CONNTRACK:-conntrack}
 HONK_PING=${HONK_PING:-ping}
 HONK_IP=${HONK_IP:-ip}
@@ -17,8 +19,11 @@ HONK_SCRIPTS_DIR=${HONK_SCRIPTS_DIR:-/jffs/scripts}
 HONK_WWW=${HONK_WWW:-/www}
 HONK_MENU_SRC=${HONK_MENU_SRC:-/www/require/modules/menuTree.js}
 HONK_MENU_TMP=${HONK_MENU_TMP:-/tmp/menuTree.js}
-HONK_LISTEN_PORT=39527
+HONK_DEFAULT_TPROXY_PORT=12345
 HONK_CHAIN=HONK_PRE
+# Private destinations stay on the router. Sending them through REDIRECT made
+# dip(192.168.0.0/16)->direct dial from honk, and the peer refused.
+HONK_PRIVATE_CIDRS="10.0.0.0/8 172.16.0.0/12 192.168.0.0/16 100.64.0.0/10"
 HONK_PING_LIMIT=${HONK_PING_LIMIT:-3}
 HONK_WATCH_INTERVAL=${HONK_WATCH_INTERVAL:-5}
 HONK_ARM_GRACE=${HONK_ARM_GRACE:-30}
@@ -122,9 +127,9 @@ honk_unlink() {
 }
 
 honk_conntrack_delete() {
-    local facts primary child i
+    local facts primary port child i
     facts=$(honk_state honk.facts)
-    if [ ! -x "$HONK_BIN" ] || [ ! -f "$facts" ]; then
+    if [ ! -f "$facts" ]; then
         honk_log conntrack_skipped
         return 0
     fi
@@ -132,7 +137,16 @@ honk_conntrack_delete() {
     case $primary in
         ''|*[!0-9.]*) return 0 ;;
     esac
-    "$HONK_BIN" conntrack-delete --listen-ip "$primary" &
+    port=$(cat "$(honk_state honk.port)" 2>/dev/null || echo "$HONK_DEFAULT_TPROXY_PORT")
+    case $port in
+        ''|*[!0-9]*) port=$HONK_DEFAULT_TPROXY_PORT ;;
+    esac
+    honk_pin_bins
+    if [ ! -x "$HONK_CONNTRACK" ]; then
+        honk_log conntrack_skipped
+        return 0
+    fi
+    "$HONK_CONNTRACK" -D -p tcp --reply-src "$primary" --reply-port-src "$port" >/dev/null 2>&1 &
     child=$!
     i=0
     while [ "$i" -lt 8 ]; do
@@ -173,45 +187,11 @@ honk_stop_pidfile() {
     honk_kill_pid "$pid"
 }
 
-honk_is_ancestor() {
-    local pid="$1"
-    local cursor="$$"
-    local steps=0
-    while [ -n "$cursor" ] && [ "$cursor" != 1 ] && [ "$steps" -lt 20 ]; do
-        [ "$cursor" = "$pid" ] && return 0
-        cursor=$(awk '/^PPid:/ { print $2; exit }' "/proc/$cursor/status" 2>/dev/null || true)
-        steps=$((steps + 1))
-    done
-    return 1
-}
-
-# Leftover listeners only. Match the executable path, never a command line
-# that merely contains "honk" (that killed the SSH session running install).
-honk_stop_binary() {
-    local pid exe target
-    [ -e "$HONK_BIN" ] || return 0
-    target=$(readlink -f "$HONK_BIN" 2>/dev/null || printf '%s\n' "$HONK_BIN")
-    for pid in /proc/[0-9]*; do
-        pid=${pid#/proc/}
-        case $pid in
-            ''|*[!0-9]*) continue ;;
-        esac
-        if honk_is_ancestor "$pid"; then
-            continue
-        fi
-        exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
-        case $exe in
-            "$target"|"$target (deleted)"|"$HONK_BIN"|"$HONK_BIN (deleted)")
-                honk_kill_pid "$pid"
-                ;;
-        esac
-    done
-}
-
+# Pid files only. Scanning command lines for "honk" killed the SSH session
+# that was running install.
 honk_stop_listener() {
     honk_stop_pidfile "$(honk_state honk.pid)"
     honk_stop_pidfile "$(honk_state honk.watch.pid)"
-    honk_stop_binary
     rm -f "$(honk_state honk.ready)"
 }
 
@@ -219,6 +199,7 @@ honk_disarm() {
     local reason="${1:-disarmed}"
     honk_pin_bins
     honk_unlink
+    honk_fc_restore
     honk_stop_listener
     honk_conntrack_delete
     rm -f \
@@ -227,6 +208,7 @@ honk_disarm() {
         "$(honk_state honk.deadline)" \
         "$(honk_state honk.gateway)" \
         "$(honk_state honk.facts)" \
+        "$(honk_state honk.port)" \
         "$(honk_state honk.pingfails)"
     honk_set_status off "$reason"
     honk_log "disarmed $reason"
@@ -302,7 +284,7 @@ honk_gather_facts() {
         [ -n "$locals" ] || continue
         printf 'local_ip=%s\n' "$locals" >>"$facts"
     done
-    if [ ! -x "$HONK_BIN" ] || ! "$HONK_BIN" plan --facts "$facts" >/dev/null; then
+    if ! honk_validate_facts "$facts"; then
         rm -f "$facts"
         honk_set_status refused need_facts
         return 1
@@ -312,14 +294,230 @@ honk_gather_facts() {
 
 honk_wait_listen() {
     local i="0"
-    while [ "$i" -lt 5 ]; do
-        if "$HONK_BIN" check-listen --facts "$(honk_state honk.facts)"; then
+    while [ "$i" -lt 15 ]; do
+        if honk_listening; then
             return 0
         fi
         i=$((i + 1))
         sleep 1
     done
     return 1
+}
+
+honk_listening() {
+    local port hex
+    if [ "${HONK_ASSUME_LISTENING:-0}" = "1" ]; then
+        return 0
+    fi
+    port=$(cat "$(honk_state honk.port)" 2>/dev/null || echo "$HONK_DEFAULT_TPROXY_PORT")
+    hex=$(printf '%04X' "$port")
+    [ -r /proc/net/tcp ] || return 1
+    awk -v hex="$hex" '
+        NR > 1 && $4 == "0A" {
+            split($2, a, ":")
+            if (toupper(a[2]) == hex) found = 1
+        }
+        END { exit found ? 0 : 1 }
+    ' /proc/net/tcp
+}
+
+honk_tproxy_port() {
+    local port="$HONK_DEFAULT_TPROXY_PORT" raw
+    if [ -f "$HONK_PREFIX/config.dae" ]; then
+        raw=$(sed -n 's/^[[:space:]]*tproxy_port:[[:space:]]*//p' "$HONK_PREFIX/config.dae" | head -n 1)
+        raw=${raw%%#*}
+        raw=$(printf '%s' "$raw" | tr -d " '\"")
+        case $raw in
+            ''|*[!0-9]*) ;;
+            *)
+                if [ "$raw" -ge 1 ] && [ "$raw" -le 65535 ]; then
+                    port=$raw
+                fi
+                ;;
+        esac
+    fi
+    printf '%s\n' "$port"
+}
+
+honk_validate_facts() {
+    local facts="$1"
+    awk '
+        BEGIN { ok = 1 }
+        /^ifname=/ {
+            name = substr($0, 8)
+            if (name !~ /^[A-Za-z][A-Za-z0-9._-]{0,14}$/) ok = 0
+        }
+        /^lan_mask=/ { mask = substr($0, 10) }
+        /^primary_ip=/ { primary = substr($0, 12) }
+        /^local_ip=/ { locals[substr($0, 10)] = 1 }
+        END {
+            if (primary == "" || !(primary in locals)) ok = 0
+            n = split(mask, o, ".")
+            if (n != 4) ok = 0
+            bits = 0
+            zero = 0
+            for (i = 1; i <= 4; i++) {
+                v = o[i] + 0
+                if (o[i] !~ /^[0-9]+$/ || v > 255) ok = 0
+                for (b = 128; b >= 1; b /= 2) {
+                    if (int(v / b) % 2 == 1) {
+                        if (zero) ok = 0
+                        bits++
+                    } else zero = 1
+                }
+            }
+            if (bits < 8 || bits > 30) ok = 0
+            split(primary, p, ".")
+            if (p[1] + 0 == 0 || p[1] + 0 == 127 || p[1] + 0 >= 224) ok = 0
+            exit ok ? 0 : 1
+        }
+    ' "$facts"
+}
+
+honk_chain_add() {
+    # shellcheck disable=SC2068
+    if ! "$HONK_IPTABLES" -t nat -A "$HONK_CHAIN" "$@"; then
+        honk_unlink
+        return 1
+    fi
+}
+
+honk_apply() {
+    local facts ifname primary mask prefix network cidr port
+    facts=$(honk_state honk.facts)
+    [ -f "$facts" ] || return 1
+    ifname=$(sed -n 's/^ifname=//p' "$facts" | head -n 1)
+    primary=$(sed -n 's/^primary_ip=//p' "$facts" | head -n 1)
+    mask=$(sed -n 's/^lan_mask=//p' "$facts" | head -n 1)
+    prefix=$(honk_prefix "$mask") || return 1
+    network=$(honk_network "$primary" "$prefix") || return 1
+    port=$(cat "$(honk_state honk.port)" 2>/dev/null || honk_tproxy_port)
+    honk_unlink
+    "$HONK_IPTABLES" -t nat -N "$HONK_CHAIN" >/dev/null 2>&1 || true
+    honk_chain_add -i "$ifname" -p tcp -d "$primary" --dport 9090 -j RETURN || return 1
+    honk_chain_add -i "$ifname" -p tcp --dport 53 -j RETURN || return 1
+    while IFS= read -r cidr; do
+        [ -n "$cidr" ] || continue
+        honk_chain_add -i "$ifname" -p tcp -d "$cidr" -j RETURN || return 1
+    done <<EOF
+$(sed -n 's/^local_ip=//p' "$facts")
+$network/$prefix
+127.0.0.0/8
+169.254.0.0/16
+224.0.0.0/4
+255.255.255.255/32
+$(
+# shellcheck disable=SC2086
+printf '%s\n' $HONK_PRIVATE_CIDRS
+)
+EOF
+    honk_chain_add -i "$ifname" -p tcp -j REDIRECT --to-ports "$port" || return 1
+    if ! "$HONK_IPTABLES" -t nat -C PREROUTING -j "$HONK_CHAIN" >/dev/null 2>&1; then
+        honk_chain_add_prerouting || return 1
+    fi
+}
+
+honk_chain_add_prerouting() {
+    if ! "$HONK_IPTABLES" -t nat -A PREROUTING -j "$HONK_CHAIN"; then
+        honk_unlink
+        return 1
+    fi
+}
+
+honk_prefix() {
+    awk -v mask="$1" 'BEGIN {
+        n = split(mask, o, ".")
+        if (n != 4) exit 1
+        bits = 0
+        zero = 0
+        for (i = 1; i <= 4; i++) {
+            v = o[i] + 0
+            if (o[i] !~ /^[0-9]+$/ || v > 255) exit 1
+            for (b = 128; b >= 1; b /= 2) {
+                if (int(v / b) % 2 == 1) {
+                    if (zero) exit 1
+                    bits++
+                } else zero = 1
+            }
+        }
+        if (bits < 8 || bits > 30) exit 1
+        printf "%d\n", bits
+    }'
+}
+
+honk_network() {
+    awk -v ip="$1" -v bits="$2" 'BEGIN {
+        split(ip, o, ".")
+        if (length(o) != 4) exit 1
+        n = 0
+        for (i = 1; i <= 4; i++) n = n * 256 + (o[i] + 0)
+        shift = 32 - bits
+        if (shift > 0) {
+            size = 1
+            for (i = 0; i < shift; i++) size *= 2
+            n = int(n / size) * size
+        }
+        printf "%d.%d.%d.%d\n", int(n / 16777216) % 256, int(n / 65536) % 256, int(n / 256) % 256, n % 256
+    }'
+}
+
+honk_accel_on() {
+    "$1" status 2>/dev/null | grep -E -q 'L2 & L3 Acceleration is Enabled|Flow Cache is Enabled|is Enabled|^[[:space:]]*Enabled[[:space:]]*$'
+}
+
+honk_fc_suspend() {
+    local state bin
+    state=$(honk_state honk.fc)
+    : >"$state"
+    bin=$HONK_FC
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+        printf 'fc_bin=%s\n' "$bin" >>"$state"
+        if honk_accel_on "$bin"; then
+            echo fc=on >>"$state"
+        else
+            echo fc=off >>"$state"
+        fi
+        if "$bin" disable; then
+            "$bin" flush || honk_log fc_flush_failed
+        else
+            honk_log fc_disable_failed
+        fi
+    else
+        echo fc=absent >>"$state"
+    fi
+    bin=$HONK_RUNNER
+    if [ -n "$bin" ] && [ -x "$bin" ]; then
+        printf 'runner_bin=%s\n' "$bin" >>"$state"
+        if honk_accel_on "$bin"; then
+            echo runner=on >>"$state"
+        else
+            echo runner=off >>"$state"
+        fi
+        "$bin" disable || honk_log runner_disable_failed
+    else
+        echo runner=absent >>"$state"
+    fi
+    honk_log fc_suspended
+}
+
+honk_fc_restore() {
+    local state fc_bin runner_bin
+    state=$(honk_state honk.fc)
+    [ -f "$state" ] || return 0
+    fc_bin=$(sed -n 's/^fc_bin=//p' "$state" | head -n 1)
+    runner_bin=$(sed -n 's/^runner_bin=//p' "$state" | head -n 1)
+    if grep -q '^fc=on$' "$state" && [ -n "$fc_bin" ] && [ -x "$fc_bin" ]; then
+        if "$fc_bin" enable; then
+            "$fc_bin" flush || honk_log fc_flush_failed
+        else
+            honk_log fc_enable_failed
+        fi
+    fi
+    if grep -q '^runner=on$' "$state" && [ -n "$runner_bin" ] && [ -x "$runner_bin" ]; then
+        "$runner_bin" enable || honk_log runner_enable_failed
+    fi
+    rm -f "$state"
+    honk_log fc_restored
 }
 
 honk_export_config() {
@@ -361,99 +559,29 @@ honk_log_file() {
     printf '%s\n' "honk: $*" >> "$(honk_state honk.log)"
 }
 
-honk_fetch_subscription() {
-    local url="$1"
-    local curl err regex
-    honk_pin_bins
-    curl=$(honk_resolve curl || true)
-    if [ -z "$curl" ]; then
-        honk_log_file need_curl
+honk_refresh() {
+    honk_export_config
+    if [ ! -f "$(honk_state honk.armed)" ] || [ ! -x "$HONK_BIN" ] || [ -z "${HONK_CONFIG:-}" ]; then
+        honk_log not_armed
         return 1
     fi
-    err=$(honk_state honk.curl.err)
-    # Airports answer the default client with a base64 SIP002 blob and answer
-    # User-Agent Surge with Surge lines. The importer accepts either.
-    if ! "$curl" -fsSL --max-time 30 -A Surge -o "$(honk_state honk.sub)" "$url" 2>"$err"; then
-        honk_log_file "subscription_fetch_failed $(tr '\n' ' ' <"$err")"
-        return 1
-    fi
-    regex=$(sed -n 's/^# merlin-policy-regex://p' "$HONK_CONFIG" | head -n 1)
-    status=0
-    report=$("$HONK_BIN" import-surge --input "$(honk_state honk.sub)" --regex "$regex" --out "$HONK_NODE_CACHE" 2>"$err") || status=$?
-    if [ -n "$report" ]; then
-        honk_log_file "$report"
-    fi
-    if [ "$status" != 0 ]; then
-        honk_log_file "subscription_parse_failed $(tr '\n' ' ' <"$err")"
-        return 1
-    fi
-    return 0
+    "$HONK_BIN" -c "$HONK_CONFIG" reload >>"$(honk_state honk.log)" 2>&1 || return 1
+    honk_log refreshed
 }
 
-honk_prepare_proxy() {
-    local url
-    honk_export_config
+honk_arm() {
+    local minutes now port primary
     if [ ! -f "$HONK_PREFIX/config.dae" ]; then
-        honk_log_file "config absent direct-copy"
-        return 0
-    fi
-    url=$("$HONK_BIN" subscription-url --config "$HONK_CONFIG" || true)
-    if [ -n "$url" ]; then
-        if ! honk_fetch_subscription "$url"; then
-            honk_set_status refused need_subscription
-            return 1
-        fi
-    fi
-    if ! "$HONK_BIN" summary --config "$HONK_CONFIG" --cache "$HONK_NODE_CACHE" --selections "$HONK_SELECTIONS" >>"$(honk_state honk.log)" 2>&1; then
         honk_log_file need_config
         honk_set_status refused need_config
         return 1
     fi
-    return 0
-}
-
-honk_refresh() {
-    local url fragment page
-    honk_pin_bins
-    honk_export_config
-    [ -n "${HONK_CONFIG:-}" ] || return 1
-    [ -x "$HONK_BIN" ] || return 1
-    honk_write_selections || true
-    url=$("$HONK_BIN" subscription-url --config "$HONK_CONFIG" || true)
-    [ -n "$url" ] || return 1
-    honk_fetch_subscription "$url" || return 1
-    fragment=$(honk_state honk.groups)
-    if [ -f "$HONK_NODE_CACHE" ]; then
-        "$HONK_BIN" ui-fragment --config "$HONK_CONFIG" --cache "$HONK_NODE_CACHE" --selections "$HONK_SELECTIONS" >"$fragment" || return 1
-    else
-        "$HONK_BIN" ui-fragment --config "$HONK_CONFIG" --selections "$HONK_SELECTIONS" >"$fragment" || return 1
+    if [ ! -x "$HONK_BIN" ]; then
+        honk_log_file need_config
+        honk_set_status refused need_config
+        return 1
     fi
-    honk_splice_groups "$HONK_PREFIX/www/Tools_Honk.asp" "$fragment"
-    page=$HONK_PREFIX/page.name
-    if [ -f "$page" ]; then
-        honk_splice_groups "$HONK_WWW/user/$(cat "$page")" "$fragment" || true
-    fi
-    honk_log refreshed
-}
-
-honk_splice_groups() {
-    local file="$1"
-    local fragment="$2"
-    local tmp
-    [ -f "$file" ] || return 0
-    tmp=$file.groups-tmp
-    awk -v frag="$fragment" '
-        BEGIN { skip = 0 }
-        $0 == "<!-- honk-groups-begin -->" { print; while ((getline line < frag) > 0) print line; skip = 1; next }
-        $0 == "<!-- honk-groups-end -->" { skip = 0 }
-        skip == 0 { print }
-    ' "$file" >"$tmp" && mv "$tmp" "$file"
-}
-
-honk_arm() {
-    local minutes now pid
     honk_export_config
-    honk_write_selections || true
     if [ -f "$(honk_state honk.armed)" ]; then
         honk_disarm restart
     fi
@@ -461,18 +589,19 @@ honk_arm() {
     if ! honk_gather_facts; then
         return 1
     fi
-    if ! honk_prepare_proxy; then
-        return 1
-    fi
-    if [ -f "${HONK_CONFIG:-}" ]; then
-        "$HONK_BIN" listen --facts "$(honk_state honk.facts)" --ready "$(honk_state honk.ready)" --config "$HONK_CONFIG" --cache "$HONK_NODE_CACHE" --selections "$HONK_SELECTIONS" >>"$(honk_state honk.log)" 2>&1 &
-    else
-        "$HONK_BIN" listen --facts "$(honk_state honk.facts)" --ready "$(honk_state honk.ready)" >>"$(honk_state honk.log)" 2>&1 &
-    fi
-    pid=$!
-    printf '%s\n' "$pid" >"$(honk_state honk.pid)"
+    port=$(honk_tproxy_port)
+    primary=$(sed -n 's/^primary_ip=//p' "$(honk_state honk.facts)" | head -n 1)
+    printf '%s\n' "$port" >"$(honk_state honk.port)"
+    DAE_LOCATION_ASSET=$HONK_PREFIX \
+        "$HONK_BIN" -c "$HONK_PREFIX/config.dae" --redirect "$primary:$port" >>"$(honk_state honk.log)" 2>&1 &
+    printf '%s\n' "$!" >"$(honk_state honk.pid)"
     if ! honk_wait_listen; then
         honk_disarm listener_down
+        return 1
+    fi
+    honk_fc_suspend
+    if ! honk_apply; then
+        honk_disarm apply_failed
         return 1
     fi
     minutes=$(honk_minutes)
@@ -483,12 +612,8 @@ honk_arm() {
     "$HONK_SCRIPT_DIR/honk-watch.sh" >>"$(honk_state honk.log)" 2>&1 &
     printf '%s\n' "$!" >"$(honk_state honk.watch.pid)"
     : >"$(honk_state honk.armed)"
-    if ! "$HONK_BIN" apply --facts "$(honk_state honk.facts)"; then
-        honk_disarm apply_failed
-        return 1
-    fi
     honk_set_status armed armed
-    honk_log "armed port $HONK_LISTEN_PORT"
+    honk_log "armed port $port"
 }
 
 honk_confirm() {
@@ -512,7 +637,7 @@ honk_watch_step() {
         honk_disarm listener_down
         return 1
     fi
-    if ! "$HONK_BIN" check-listen --facts "$(honk_state honk.facts)"; then
+    if ! honk_listening; then
         honk_disarm listener_down
         return 1
     fi
@@ -572,7 +697,7 @@ honk_nat_start() {
     if ! honk_watch_step; then
         return 0
     fi
-    if ! "$HONK_BIN" apply --facts "$(honk_state honk.facts)"; then
+    if ! honk_apply; then
         honk_disarm apply_failed
     fi
 }
@@ -771,9 +896,19 @@ honk_install() {
     if [ "$src" != "$HONK_PREFIX" ]; then
         cp -R "$src/scripts/." "$HONK_PREFIX/scripts/"
         cp -R "$src/www/." "$HONK_PREFIX/www/"
-        if [ -f "$src/honk-dataplane" ]; then
-            cp "$src/honk-dataplane" "$HONK_PREFIX/honk-dataplane"
-            chmod 755 "$HONK_PREFIX/honk-dataplane"
+        if [ -f "$src/honk-core" ]; then
+            cp "$src/honk-core" "$HONK_PREFIX/honk-core"
+            chmod 755 "$HONK_PREFIX/honk-core"
+        fi
+        if [ -d "$src/ui" ]; then
+            rm -rf "$HONK_PREFIX/ui"
+            cp -R "$src/ui" "$HONK_PREFIX/ui"
+        fi
+        if [ -f "$src/geoip.dat" ]; then
+            cp "$src/geoip.dat" "$HONK_PREFIX/geoip.dat"
+        fi
+        if [ -f "$src/geosite.dat" ]; then
+            cp "$src/geosite.dat" "$HONK_PREFIX/geosite.dat"
         fi
     fi
     chmod 755 "$HONK_PREFIX/scripts/"*.sh
