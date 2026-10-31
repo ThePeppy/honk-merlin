@@ -211,24 +211,45 @@ fi
 cat >"$work/menu.js" <<'EOF'
 var menuTree = {
 tab: [
-{url: "Advanced_System_Content.asp", tabName: "<#menu5_6_2#>"},
-{url: "Advanced_FirmwareUpgrade_Content.asp", tabName: "<#menu5_6_3#>"},
+{url: "Advanced_System_Content.asp", tabName: "<#613#>"},
+{url: "Advanced_FirmwareUpgrade_Content.asp", tabName: "<#614#>"},
 ]
 };
+retArray.push("Advanced_System_Content.asp");
 return menuTree;
 EOF
 honk_menu_insert "$work/menu.js" user3.asp || fail "menu insert"
 honk_menu_insert "$work/menu.js" user3.asp || fail "menu insert twice"
 [ "$(grep -c 'tabName: "Honk"' "$work/menu.js")" = 1 ] || fail "duplicate Honk tab"
 grep -q 'return menuTree' "$work/menu.js" || fail "menu wrapper lost"
+grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu.js" || fail "exclude list was treated as the anchor"
+cat >"$work/menu-ws.js" <<'EOF'
+var menuTree = {
+tab: [
+{ url : "Advanced_System_Content.asp" , tabName: "<#menu5_6_2#>" },
+]
+};
+return menuTree;
+EOF
+honk_menu_insert "$work/menu-ws.js" user5.asp || fail "whitespace anchor was rejected"
+[ "$(grep -c 'tabName: "Honk"' "$work/menu-ws.js")" = 1 ] || fail "whitespace anchor inserted the wrong number of tabs"
 cp "$work/menu.js" "$work/menu-dup.js"
-printf '%s\n' '{url: "Advanced_System_Content.asp", tabName: "<#menu5_6_2#>"},' >>"$work/menu-dup.js"
+printf '%s\n' '{url: "Advanced_System_Content.asp", tabName: "<#613#>"},' >>"$work/menu-dup.js"
 before=$(md5sum <"$work/menu-dup.js")
-if honk_menu_insert "$work/menu-dup.js" user4.asp; then
+if honk_menu_insert "$work/menu-dup.js" user4.asp 2>"$work/menu-dup.err"; then
     fail "duplicate anchor was accepted"
 fi
 after=$(md5sum <"$work/menu-dup.js")
 [ "$before" = "$after" ] || fail "duplicate anchor modified the menu"
+grep -q menu_anchor_not_found "$work/menu-dup.err" || fail "duplicate anchor was silent"
+printf '%s\nreturn menuTree;\n' 'var menuTree = { tab: [] };' >"$work/menu-missing.js"
+before=$(md5sum <"$work/menu-missing.js")
+if honk_menu_insert "$work/menu-missing.js" user6.asp 2>"$work/menu-missing.err"; then
+    fail "missing anchor was accepted"
+fi
+after=$(md5sum <"$work/menu-missing.js")
+[ "$before" = "$after" ] || fail "missing anchor modified the menu"
+grep -q menu_anchor_not_found "$work/menu-missing.err" || fail "missing anchor was silent"
 
 printf '%s\n' 'honk_runtime armed' 'other_addon 1' >"$HONK_SETTINGS"
 honk_settings_strip
@@ -280,5 +301,51 @@ grep -q '^keep_me 1$' "$HONK_SETTINGS" || fail "uninstall removed a foreign sett
 if grep -q '# honk-begin' "$work/jffs/scripts/service-event"; then
     fail "service-event hook survived uninstall"
 fi
+
+# Install must not report success when the System page URL is absent, and
+# the numeric dictionary token on 3006.102 must still produce one Honk tab.
+cat >"$work/helper.sh" <<'EOF'
+#!/bin/sh
+am_settings_set() { :; }
+am_settings_get() { :; }
+am_get_webui_page() { am_webui_page=user1.asp; }
+EOF
+printf '%s\n' 'var menuTree = { tab: [] };' 'return menuTree;' >"$work/menu-install-miss.js"
+mkdir -p "$work/www"
+if HONK_SKIP_WEBUI=0 HONK_SKIP_MOUNT=1 \
+    HONK_HELPER="$work/helper.sh" \
+    HONK_WWW="$work/www" \
+    HONK_MENU_SRC="$work/menu-install-miss.js" \
+    HONK_MENU_TMP="$work/menu-install-miss-tmp.js" \
+    honk_install >"$work/install-miss.out" 2>"$work/install-miss.err"
+then
+    fail "install succeeded without a menu anchor"
+fi
+grep -q menu_anchor_not_found "$work/install-miss.err" || fail "install hid a missing anchor"
+if grep -q 'honk: installed' "$work/install-miss.err"; then
+    fail "install reported installed without the tab"
+fi
+cat >"$work/menu-install.js" <<'EOF'
+var menuTree = {
+tab: [
+{url: "Advanced_System_Content.asp", tabName: "<#613#>"},
+]
+};
+retArray.push("Advanced_System_Content.asp");
+return menuTree;
+EOF
+HONK_SKIP_WEBUI=0 HONK_SKIP_MOUNT=1 \
+    HONK_HELPER="$work/helper.sh" \
+    HONK_WWW="$work/www" \
+    HONK_MENU_SRC="$work/menu-install.js" \
+    HONK_MENU_TMP="$work/menu-install-tmp.js" \
+    honk_install >"$work/install-ok.out" 2>"$work/install-ok.err"
+grep -q 'honk: installed' "$work/install-ok.err" || fail "numeric menu token did not install"
+if grep -q menu_anchor_not_found "$work/install-ok.err"; then
+    fail "numeric menu token was reported missing"
+fi
+[ "$(grep -c 'tabName: "Honk"' "$work/menu-install-tmp.js")" = 1 ] || fail "install did not leave one Honk tab"
+grep -A1 'tabName: "<#613#>"' "$work/menu-install-tmp.js" | grep -q 'tabName: "Honk"' || fail "Honk tab was not inserted after the System page"
+grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu-install-tmp.js" || fail "install treated the exclude list as the anchor"
 
 echo "safety: ok"

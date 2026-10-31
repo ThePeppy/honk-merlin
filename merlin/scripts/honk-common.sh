@@ -25,7 +25,6 @@ HONK_ARM_GRACE=${HONK_ARM_GRACE:-30}
 HONK_SKIP_MOUNT=${HONK_SKIP_MOUNT:-0}
 HONK_SKIP_WEBUI=${HONK_SKIP_WEBUI:-0}
 HONK_SCRIPT_DIR=${HONK_SCRIPT_DIR:-$(cd "$(dirname "$0")" && pwd)}
-HONK_MENU_ANCHOR='{url: "Advanced_System_Content.asp", tabName: "<#menu5_6_2#>"},'
 
 honk_log() {
     if command -v logger >/dev/null 2>&1; then
@@ -416,10 +415,19 @@ honk_menu_insert() {
         *) return 1 ;;
     esac
     tmp=$file.honk-tmp
-    if ! awk -v anchor="$HONK_MENU_ANCHOR" -v honk="{url: \"$page\", tabName: \"Honk\"}," '
+    # Match the System page by its URL. Merlin 3006.102 builds use a numeric
+    # dictionary token such as <#613#> instead of <#menu5_6_2#>, and the
+    # spaces around the colon are not stable. Any other occurrence count
+    # leaves the menu file untouched.
+    if ! awk -v honk="{url: \"$page\", tabName: \"Honk\"}," '
+        function is_anchor(s, t) {
+            t = s
+            gsub(/[[:space:]]/, "", t)
+            return index(t, "url:\"Advanced_System_Content.asp\"") > 0
+        }
         BEGIN { n = 0 }
         {
-            if ($0 == anchor) {
+            if (is_anchor($0)) {
                 n++
                 print
                 if (n == 1) {
@@ -435,15 +443,18 @@ honk_menu_insert() {
         END { if (n != 1) exit 2 }
     ' "$file" >"$tmp"; then
         rm -f "$tmp"
+        honk_log menu_anchor_not_found
         return 1
     fi
     if ! grep -q 'return menuTree' "$tmp"; then
         rm -f "$tmp"
+        honk_log menu_anchor_not_found
         return 1
     fi
     count=$(grep -c 'tabName: "Honk"' "$tmp" || true)
     if [ "$count" != "1" ]; then
         rm -f "$tmp"
+        honk_log menu_anchor_not_found
         return 1
     fi
     mv "$tmp" "$file"
@@ -588,7 +599,13 @@ honk_install() {
     honk_install_hooks
     honk_disarm boot_off
     if [ "$HONK_SKIP_WEBUI" != "1" ]; then
-        honk_mount_page || return 1
+        if ! honk_mount_page; then
+            return 1
+        fi
+        if [ "$(grep -c 'tabName: "Honk"' "$HONK_MENU_TMP" || true)" != "1" ]; then
+            honk_log menu_anchor_not_found
+            return 1
+        fi
     fi
     honk_log installed
 }
