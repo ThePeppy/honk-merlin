@@ -63,7 +63,6 @@ pub async fn relay_direct(mut client: TcpStream, dest: SocketAddr) -> io::Result
 #[cfg(test)]
 mod tests {
     use std::net::SocketAddr;
-    use std::sync::Arc;
     use std::time::Duration;
 
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -136,9 +135,12 @@ local_ip=192.168.50.1
     }
 
     #[test]
-    fn outbound_helper_is_not_required_to_classify() {
-        // plan_relay has no proxy arm; calling the unwired dial is a separate seam.
-        let _ = Arc::new(());
-        assert!(crate::dial_honk_outbound().is_err());
+    fn classification_does_not_open_a_socket() {
+        let excluded = excluded();
+        let bind = bind();
+        assert!(matches!(
+            plan_relay(Some("1.1.1.1:443".parse().unwrap()), bind, &excluded),
+            RelayPlan::Direct(_)
+        ));
     }
 }

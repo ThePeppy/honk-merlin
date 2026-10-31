@@ -95,10 +95,31 @@ where
                         plan_relay(original, bind, &excluded)
                     };
                     drop(lookup);
-                    if let RelayPlan::Direct(dest) = decision
-                        && let Err(error) = relay_direct(stream, dest).await
-                    {
-                        eprintln!("honk-dataplane: relay {dest}: {error}");
+                    if let RelayPlan::Direct(dest) = decision {
+                        let peer = stream.peer_addr().unwrap_or(dest);
+                        let mut stream = stream;
+                        let result = if let Some(path) = crate::route::config_file() {
+                            let cache = std::env::var_os("HONK_NODE_CACHE").map(std::path::PathBuf::from);
+                            let selections = std::env::var_os("HONK_SELECTIONS")
+                                .map(std::path::PathBuf::from)
+                                .unwrap_or_else(|| path.with_file_name("select.txt"));
+                            let prelude = crate::sniff::read_prelude(&mut stream).await;
+                            crate::route::handle(
+                                &path,
+                                cache.as_deref(),
+                                &selections,
+                                stream,
+                                dest,
+                                peer,
+                                prelude,
+                            )
+                            .await
+                        } else {
+                            relay_direct(stream, dest).await
+                        };
+                        if let Err(error) = result {
+                            eprintln!("honk-dataplane: relay: {error}");
+                        }
                     }
                 });
             }

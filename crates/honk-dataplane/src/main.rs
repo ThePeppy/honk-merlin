@@ -10,6 +10,7 @@ use std::process::ExitCode;
 
 use anyhow::Context;
 use clap::{Parser, Subcommand};
+use honk_config::parser::parse_dae_config;
 use honk_dataplane::{
     KernelFacts, LISTEN_PORT, ListenError, MerlinAction, NAT_CHAIN, NAT_TABLE, NixOriginalDest,
     PlanError, PreferredBackend, SystemRunner, apply_redirect, conntrack_deletes, merlin_action,
@@ -71,6 +72,34 @@ enum Command {
         facts: PathBuf,
         #[arg(long)]
         proc: Option<PathBuf>,
+    },
+    /// Parse a dae file and exit 0 when honk-config accepts it.
+    CheckConfig {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Filter a Surge node list and write the lines that remain.
+    ImportSurge {
+        #[arg(long)]
+        input: PathBuf,
+        #[arg(long, default_value = "")]
+        regex: String,
+        #[arg(long)]
+        out: PathBuf,
+    },
+    /// Print the first subscription URL, or nothing when the file has none.
+    SubscriptionUrl {
+        #[arg(long)]
+        config: PathBuf,
+    },
+    /// Print group `<select>` rows for the Merlin page.
+    UiFragment {
+        #[arg(long)]
+        config: PathBuf,
+        #[arg(long)]
+        cache: Option<PathBuf>,
+        #[arg(long)]
+        selections: PathBuf,
     },
 }
 
@@ -181,6 +210,37 @@ async fn run() -> anyhow::Result<()> {
                     plan.listen_port
                 );
             }
+        }
+        Command::CheckConfig { config } => {
+            let text = std::fs::read_to_string(&config)
+                .with_context(|| format!("read {}", config.display()))?;
+            parse_dae_config(&text)?;
+            println!("ok");
+        }
+        Command::SubscriptionUrl { config } => {
+            let text = std::fs::read_to_string(&config)
+                .with_context(|| format!("read {}", config.display()))?;
+            let parsed = parse_dae_config(&text)?;
+            if let Some(subscription) = parsed.subscriptions.first() {
+                println!("{}", subscription.url);
+            }
+        }
+        Command::ImportSurge { input, regex, out } => {
+            let text = std::fs::read_to_string(&input)
+                .with_context(|| format!("read {}", input.display()))?;
+            let filtered = honk_dataplane::surge_filter(&text, &regex);
+            if let Some(parent) = out.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&out, filtered)?;
+        }
+        Command::UiFragment {
+            config,
+            cache,
+            selections,
+        } => {
+            let html = honk_dataplane::ui_rows(&config, cache.as_deref(), &selections)?;
+            print!("{html}");
         }
     }
     Ok(())

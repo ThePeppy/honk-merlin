@@ -14,6 +14,10 @@ mod facts;
 mod listen;
 mod outbound;
 mod relay;
+mod route;
+mod sniff;
+mod ss;
+mod surge;
 
 pub use apply::{ApplyError, Runner, SystemRunner, apply_redirect, unlink_redirect};
 pub use arm::{
@@ -24,7 +28,9 @@ pub use facts::{
     KernelFacts, MerlinAction, PreferredBackend, config_flag, merlin_action, preferred_backend,
 };
 pub use listen::{ListenError, NixOriginalDest, serve, tcp_listening};
-pub use outbound::{OutboundUnwired, dial_honk_outbound};
+pub use outbound::dial_honk_outbound;
 pub use relay::{OriginalDestination, RelayPlan, plan_relay, relay_direct};
+pub use route::ui_rows;
+pub use surge::filter_body as surge_filter;
 
 pub const NAT_TABLE: &str = "nat";

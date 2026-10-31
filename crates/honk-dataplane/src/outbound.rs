@@ -1,20 +1,26 @@
-//! honk-outbound is intentionally not linked into this binary.
+//! Shadowsocks dial used after a rule selects a node.
 //!
-//! Phase 1 copies bytes to the original destination so an enable test can be
-//! rolled back without depending on a proxy node. Calling this function is the
-//! explicit seam a later phase replaces; the accept loop does not call it.
+//! The full `honk-outbound` crate is not linked: its AEAD path is built on
+//! BoringSSL. [`dial_honk_outbound`] follows that crate's legacy AEAD TCP
+//! layout for `chacha20-ietf-poly1305` only.
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OutboundUnwired;
-
-impl std::fmt::Display for OutboundUnwired {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("honk-outbound dial is not wired in phase 1")
-    }
-}
-
-impl std::error::Error for OutboundUnwired {}
-
-pub fn dial_honk_outbound() -> Result<std::net::TcpStream, OutboundUnwired> {
-    Err(OutboundUnwired)
+pub async fn dial_honk_outbound(
+    server_host: &str,
+    server_port: u16,
+    password: &str,
+    host: &str,
+    port: u16,
+    stream: tokio::net::TcpStream,
+    prelude: &[u8],
+) -> std::io::Result<()> {
+    crate::ss::relay(
+        server_host,
+        server_port,
+        password,
+        host,
+        port,
+        stream,
+        prelude,
+    )
+    .await
 }
