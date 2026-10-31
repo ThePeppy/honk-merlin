@@ -26,7 +26,7 @@ eval "export CARGO_TARGET_${U}_RUSTFLAGS='-C link-self-contained=no'"
 BINDGEN_EXTRA_CLANG_ARGS="$(ci/zig-bindgen-env "$ZIGCC_TARGET")"
 export BINDGEN_EXTRA_CLANG_ARGS
 cargo build --release -p honk-core --no-default-features \
-    --features clash-api,mimalloc,rprx,redirect \
+    --features clash-api,native-api,mimalloc,rprx,redirect \
     --target "$T"
 
 bin=$root/target/$T/release/honk-core
