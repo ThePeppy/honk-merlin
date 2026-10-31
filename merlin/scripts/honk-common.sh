@@ -173,17 +173,35 @@ honk_stop_pidfile() {
     honk_kill_pid "$pid"
 }
 
-honk_stop_named() {
-    local pid cmd
+honk_is_ancestor() {
+    local pid="$1"
+    local cursor="$$"
+    local steps=0
+    while [ -n "$cursor" ] && [ "$cursor" != 1 ] && [ "$steps" -lt 20 ]; do
+        [ "$cursor" = "$pid" ] && return 0
+        cursor=$(awk '/^PPid:/ { print $2; exit }' "/proc/$cursor/status" 2>/dev/null || true)
+        steps=$((steps + 1))
+    done
+    return 1
+}
+
+# Leftover listeners only. Match the executable path, never a command line
+# that merely contains "honk" (that killed the SSH session running install).
+honk_stop_binary() {
+    local pid exe target
+    [ -e "$HONK_BIN" ] || return 0
+    target=$(readlink -f "$HONK_BIN" 2>/dev/null || printf '%s\n' "$HONK_BIN")
     for pid in /proc/[0-9]*; do
         pid=${pid#/proc/}
         case $pid in
             ''|*[!0-9]*) continue ;;
         esac
-        [ "$pid" = "$$" ] && continue
-        cmd=$(tr '\0' ' ' <"/proc/$pid/cmdline" 2>/dev/null || true)
-        case $cmd in
-            *honk-dataplane*|*honk-watch.sh*)
+        if honk_is_ancestor "$pid"; then
+            continue
+        fi
+        exe=$(readlink "/proc/$pid/exe" 2>/dev/null || true)
+        case $exe in
+            "$target"|"$target (deleted)"|"$HONK_BIN"|"$HONK_BIN (deleted)")
                 honk_kill_pid "$pid"
                 ;;
         esac
@@ -193,7 +211,7 @@ honk_stop_named() {
 honk_stop_listener() {
     honk_stop_pidfile "$(honk_state honk.pid)"
     honk_stop_pidfile "$(honk_state honk.watch.pid)"
-    honk_stop_named
+    honk_stop_binary
     rm -f "$(honk_state honk.ready)"
 }
 
@@ -353,13 +371,20 @@ honk_fetch_subscription() {
         return 1
     fi
     err=$(honk_state honk.curl.err)
-    if ! "$curl" -fsSL --max-time 30 -o "$(honk_state honk.sub)" "$url" 2>"$err"; then
+    # Airports answer the default client with a base64 SIP002 blob and answer
+    # User-Agent Surge with Surge lines. The importer accepts either.
+    if ! "$curl" -fsSL --max-time 30 -A Surge -o "$(honk_state honk.sub)" "$url" 2>"$err"; then
         honk_log_file "subscription_fetch_failed $(tr '\n' ' ' <"$err")"
         return 1
     fi
     regex=$(sed -n 's/^# merlin-policy-regex://p' "$HONK_CONFIG" | head -n 1)
-    if ! "$HONK_BIN" import-surge --input "$(honk_state honk.sub)" --regex "$regex" --out "$HONK_NODE_CACHE"; then
-        honk_log_file subscription_parse_failed
+    status=0
+    report=$("$HONK_BIN" import-surge --input "$(honk_state honk.sub)" --regex "$regex" --out "$HONK_NODE_CACHE" 2>"$err") || status=$?
+    if [ -n "$report" ]; then
+        honk_log_file "$report"
+    fi
+    if [ "$status" != 0 ]; then
+        honk_log_file "subscription_parse_failed $(tr '\n' ' ' <"$err")"
         return 1
     fi
     return 0

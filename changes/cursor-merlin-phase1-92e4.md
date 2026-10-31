@@ -5,3 +5,4 @@ Added
 - The Merlin tab is inserted after the System page URL even when its tab token is not `menu5_6_2`. Install reports `menu_anchor_not_found` and does not report `installed` when that URL is not present exactly once.
 - Router scripts find conntrack and the other tools by absolute path, and the web page shows why Enable was refused.
 - Enable loads config.dae, fetches its subscription before arming, and logs each routing decision. Disarm stops the listener and watcher even when conntrack delete is slow.
+- A subscription may be Surge lines or a plain or base64 list of SIP002 `ss://` links. Disarm does not kill a process whose command line merely contains honk.

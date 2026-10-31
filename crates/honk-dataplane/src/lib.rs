@@ -31,6 +31,6 @@ pub use listen::{ListenError, NixOriginalDest, ProxyPaths, serve, tcp_listening}
 pub use outbound::dial_honk_outbound;
 pub use relay::{OriginalDestination, RelayPlan, plan_relay, relay_direct};
 pub use route::{load_configured, ui_rows};
-pub use surge::filter_body as surge_filter;
+pub use surge::{SubscriptionImport, filter_body as surge_filter, import_subscription};
 
 pub const NAT_TABLE: &str = "nat";

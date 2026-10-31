@@ -477,6 +477,31 @@ if kill -0 "$watcher" >/dev/null 2>&1; then
     fail "watcher survived disarm"
 fi
 
+# A command line that merely contains honk must survive disarm.
+sh -c 'sleep 40' honk-dataplane >/dev/null 2>&1 &
+decoy=$!
+sh -c 'sleep 40' 'sh /jffs/addons/honk/scripts/install.sh' >/dev/null 2>&1 &
+sshish=$!
+cp /bin/sleep "$work/exact-bin"
+"$work/exact-bin" 40 >/dev/null 2>&1 &
+exact=$!
+HONK_BIN="$work/exact-bin" honk_stop_binary
+if kill -0 "$decoy" >/dev/null 2>&1; then
+    :
+else
+    fail "a command line containing honk-dataplane was killed"
+fi
+if kill -0 "$sshish" >/dev/null 2>&1; then
+    :
+else
+    fail "an install command line was killed"
+fi
+if kill -0 "$exact" >/dev/null 2>&1; then
+    fail "the dataplane binary was not killed"
+fi
+kill "$decoy" "$sshish" >/dev/null 2>&1 || true
+wait "$decoy" "$sshish" >/dev/null 2>&1 || true
+
 if [ -s "$work/command.log" ]; then
     fail "a router script invoked command"
 fi

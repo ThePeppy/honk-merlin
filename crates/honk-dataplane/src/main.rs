@@ -261,11 +261,18 @@ async fn run() -> anyhow::Result<()> {
         Command::ImportSurge { input, regex, out } => {
             let text = std::fs::read_to_string(&input)
                 .with_context(|| format!("read {}", input.display()))?;
-            let filtered = honk_dataplane::surge_filter(&text, &regex);
+            let imported = honk_dataplane::import_subscription(&text, &regex);
             if let Some(parent) = out.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            std::fs::write(&out, filtered)?;
+            std::fs::write(&out, &imported.body)?;
+            println!(
+                "subscription format={} nodes={}",
+                imported.format, imported.nodes
+            );
+            if imported.nodes == 0 {
+                anyhow::bail!("subscription produced no shadowsocks nodes");
+            }
         }
         Command::UiFragment {
             config,
