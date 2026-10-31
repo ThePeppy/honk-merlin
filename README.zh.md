@@ -40,6 +40,8 @@ honk 的 eBPF 数据面和配置语法参考 dae 的设计，出站组与 Clash 
 
 OpenWrt 用户可使用 [daeuniverse 软件源](https://openwrt.daeuniverse.org/zh-cn/)。
 
+RT-BE88U 的 Merlin 插件在 `merlin` 分支的 `merlin/` 目录，是独立的 netfilter 回退，不是 eBPF 数据面。启用前先读 `merlin/README_merlin.md`。
+
 自行编译请按[从源码构建](doc/zh/how-to-start.md#从源码构建)准备。发布二进制内嵌 eBPF；仅执行 `cargo build --release` 不会启用真实数据面。
 
 按[启动指南](doc/zh/how-to-start.md)检查内核、安装程序并验证连通性。首次部署会修改网络 hook、命名空间和 sysctl，须保留带外管理通道。

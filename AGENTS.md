@@ -15,6 +15,7 @@ Re-read it when a conversation grows long or context is trimmed: a rule read onc
 | placing or finding tests, benchmarks | `.agents/rules/test-locations.md` |
 | releases, CI workflows | `.agents/rules/release.md`; skill [`honk-release`](.agents/skills/honk-release/SKILL.md) |
 | deployment, security-sensitive paths | `.agents/rules/deployment.md`, `.agents/rules/security.md` |
+| Merlin addon, `honk-dataplane`, or the RT-BE88U netfilter fallback | `merlin/README.md` |
 | REALITY / xtls interop verification against live servers | `.agents/rules/maintainer-lab.md` (the maintainer's lab; not required for contributions) |
 <!-- task-routing:end -->
 
@@ -45,7 +46,8 @@ Maintaining this guide: a rule that binds every change goes in this file; a subs
 ├── example.dae               # Annotated example (Chinese comments)
 ├── doc/                      # en/ + zh/ doc trees: guide, design/, reference/, operations/; migration/{en,zh}/<tag>.md
 ├── ci/                       # zigcc/zigcxx: zig cc/c++ wrappers for cross builds (strip CMake's clang-style --target from boring-sys ASM rules + rustc's aarch64 errata linker args; used by build-musl and the release workflow); zig-bindgen-env: derive BINDGEN_EXTRA_CLANG_ARGS from `zig cc -E -v` for cross bindgen
-├── .github/workflows/        # release.yml: tag-triggered test + cross-build + GitHub Release
+├── .github/workflows/        # release.yml: tag-triggered test + cross-build + GitHub Release; merlin.yml: addon crate
+├── merlin/                   # RT-BE88U addon: netfilter fallback, WebUI, install and safety scripts
 └── crates/
     ├── honk-config           # Config schema + dae-syntax parser + share links (workspace member)
     ├── honk-ebpf-common      # no_std shared eBPF/userspace types (workspace member)
@@ -53,6 +55,7 @@ Maintaining this guide: a rule that binds every change goes in this file; a subs
     ├── honk-outbound         # Proxy handlers, groups, health checks (workspace member)
     ├── honk-core             # eBPF proxy engine, library + `honk-core` binary (workspace member)
     ├── honk-tool             # `honk-tool` CLI toolbox: `sub` subscription/node probing (workspace member)
+    ├── honk-dataplane        # Kernel-fact probe and Merlin REDIRECT planner (workspace member)
     └── honk-ebpf             # Kernel eBPF programs (EXCLUDED from workspace, own Cargo.lock)
 ```
 

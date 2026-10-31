@@ -40,6 +40,8 @@ Every build comes as a static musl binary; `full` also comes linked against glib
 
 For OpenWrt, use the [daeuniverse package feed](https://openwrt.daeuniverse.org/en/).
 
+The RT-BE88U Merlin addon lives on the `merlin` branch under `merlin/`. It is a separate netfilter fallback, not the eBPF datapath. Read `merlin/README.md` before enabling it.
+
 For source builds, follow [Build from source](doc/en/how-to-start.md#build-from-source). Release binaries embed eBPF; plain `cargo build --release` does not enable the real datapath.
 
 Follow the [startup guide](doc/en/how-to-start.md) for kernel checks, installation, and connectivity verification. Initial deployment changes network hooks, namespaces, and sysctls; keep an out-of-band management path available.

@@ -69,6 +69,11 @@ Read with: `AGENTS.md` (Testing instructions); `real-ebpf.md` for the root-gated
     - `crates/honk-core/src/routing/golden.rs` and `routing/golden/parsed.rs` own hand-authored routing decisions and domain projection; `ebpf::real::routing::tests` replays them against the real object in all four dial modes. `ebpf/real/routing/tests/{shared_facts,verifier_budget}.rs` own fact capacity and verifier loads. Its `dns_ownership/{aux_occupancy,datagram_fragments,health,local_udp,new_flow_rate,udp_listeners,udp_reverse,tcx}.rs` children own the corresponding packet/map contracts; `dns_ownership/network/udp_listener_selection.rs` adds real L2/L3/TUN delivery and `udp_group.rs` owns shared per-family listener fixtures. Legacy TC sentinel fixtures create only test-owned `clsact`.
     - `crates/honk-tool/tests/{geo_cli,diagnose_cli}.rs` own toolbox process contracts; `src/bpf/tests.rs` owns decoding/error policy. `honk-core/src/ebpf/map_snapshot/tests.rs` owns shared batch ABI and cursor/terminal/error traversal.
 
+- Merlin:
+    - `crates/honk-dataplane/src/{facts,arm,apply,conntrack,relay,listen}.rs` — kernel-config selection, the REDIRECT plan, apply rollback, conntrack tuple selection, original-destination refusal, and the direct copy.
+    - `crates/honk-dataplane/tests/cli.rs` — the `honk-dataplane` plan and conntrack-delete commands.
+    - `merlin/tests/safety.sh` — addon scripts with fake `nvram`, `iptables`, and `conntrack`. No router and no root.
+
 ### Benchmarks
 
 Benchmarks kept on `main`: `benches/dns.rs` (criterion, `harness = false`) covers DNS endpoint parse, cache get/put + 90/10 mix, per-query routing match, framing, forwarder cache-hit, and TcpPool/UpstreamPool exchange; run `cargo bench -p honk-core --features dns-bench --bench dns`. `benches/udp.rs` is the candidate-only UDP Criterion suite; run `cargo bench -p honk-core --bench udp -- --save-baseline udp-candidate`. Lab/deployment harnesses, raw evidence, and their documentation live only on branch `bench`; use `git worktree add ../honk-bench bench` when benchmarking so they never enter the `main` worktree.
