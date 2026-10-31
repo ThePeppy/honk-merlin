@@ -7,7 +7,11 @@ HONK_SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 
 case "${1:-}:${2:-}" in
     start:honk)
+        honk_write_selections || true
         honk_arm || true
+        ;;
+    start:honkrefresh)
+        honk_refresh || true
         ;;
     stop:honk|restart:honk)
         honk_disarm stopped || true

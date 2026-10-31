@@ -64,7 +64,15 @@ function submitHonk(action) {
 	if (!/^(1|2|5|10|15|30)$/.test(minutes)) {
 		minutes = "5";
 	}
-	document.form.amng_custom.value = "honk_confirm_minutes=" + minutes;
+	var fields = ["honk_confirm_minutes=" + minutes];
+	var nodes = document.getElementsByTagName("select");
+	var i;
+	for (i = 0; i < nodes.length; i++) {
+		if (nodes[i].id.indexOf("honk_sel_") === 0) {
+			fields.push(nodes[i].id + "=" + nodes[i].value);
+		}
+	}
+	document.form.amng_custom.value = fields.join(";");
 	document.form.action_script.value = action;
 	showLoading();
 	document.form.submit();
@@ -127,6 +135,16 @@ function submitHonk(action) {
 												<th>Listen</th>
 												<td>LAN primary address, TCP 39527</td>
 											</tr>
+											<!-- honk-groups-begin -->
+											<tr>
+												<th>Groups</th>
+												<td>Copy config.dae into the addon directory, then press Refresh.</td>
+											</tr>
+											<!-- honk-groups-end -->
+											<tr>
+												<th>Config</th>
+												<td>/jffs/addons/honk/config.dae</td>
+											</tr>
 											<tr>
 												<th>Confirm within minutes</th>
 												<td>
@@ -146,6 +164,7 @@ function submitHonk(action) {
 											<input type="button" class="button_gen" onclick="submitHonk('start_honk');" value="Enable"/>
 											<input type="button" class="button_gen" onclick="submitHonk('start_honkconfirm');" value="Confirm"/>
 											<input type="button" class="button_gen" onclick="submitHonk('stop_honk');" value="Disable"/>
+											<input type="button" class="button_gen" onclick="submitHonk('start_honkrefresh');" value="Refresh"/>
 										</div>
 									</div>
 								</td>

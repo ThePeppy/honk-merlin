@@ -203,8 +203,87 @@ honk_wait_listen() {
     return 1
 }
 
+honk_export_config() {
+    if [ -f "$HONK_PREFIX/config.dae" ]; then
+        HONK_CONFIG=$HONK_PREFIX/config.dae
+        HONK_NODE_CACHE=$HONK_PREFIX/nodes.cache
+        HONK_SELECTIONS=$HONK_PREFIX/select.txt
+        export HONK_CONFIG HONK_NODE_CACHE HONK_SELECTIONS
+    fi
+}
+
+honk_write_selections() {
+    [ -f "$HONK_SETTINGS" ] || return 0
+    honk_export_config
+    local tmp line name value rest
+    tmp=$HONK_PREFIX/select.txt.tmp
+    : >"$tmp"
+    while IFS= read -r line; do
+        case $line in
+            honk_sel_*)
+                rest=${line#honk_sel_}
+                name=${rest%% *}
+                value=${rest#* }
+                case $name in
+                    *[!A-Za-z0-9_]*) continue ;;
+                esac
+                if [ -n "$value" ] && [ "$value" != "$rest" ]; then
+                    printf '%s %s\n' "$name" "$value" >>"$tmp"
+                fi
+                ;;
+        esac
+    done <"$HONK_SETTINGS"
+    mv "$tmp" "$HONK_PREFIX/select.txt"
+}
+
+honk_refresh() {
+    local url regex tmp fragment page
+    honk_export_config
+    [ -n "${HONK_CONFIG:-}" ] || return 1
+    [ -x "$HONK_BIN" ] || return 1
+    honk_write_selections || true
+    url=$("$HONK_BIN" subscription-url --config "$HONK_CONFIG" || true)
+    [ -n "$url" ] || return 1
+    regex=$(sed -n 's/^# merlin-policy-regex://p' "$HONK_CONFIG" | head -n 1)
+    tmp=$(honk_state honk.sub)
+    if ! command -v curl >/dev/null 2>&1; then
+        honk_log need_curl
+        return 1
+    fi
+    curl -fsSL --max-time 30 -o "$tmp" "$url" || return 1
+    "$HONK_BIN" import-surge --input "$tmp" --regex "$regex" --out "$HONK_NODE_CACHE" || return 1
+    fragment=$(honk_state honk.groups)
+    if [ -f "$HONK_NODE_CACHE" ]; then
+        "$HONK_BIN" ui-fragment --config "$HONK_CONFIG" --cache "$HONK_NODE_CACHE" --selections "$HONK_SELECTIONS" >"$fragment" || return 1
+    else
+        "$HONK_BIN" ui-fragment --config "$HONK_CONFIG" --selections "$HONK_SELECTIONS" >"$fragment" || return 1
+    fi
+    honk_splice_groups "$HONK_PREFIX/www/Tools_Honk.asp" "$fragment"
+    page=$HONK_PREFIX/page.name
+    if [ -f "$page" ]; then
+        honk_splice_groups "$HONK_WWW/user/$(cat "$page")" "$fragment" || true
+    fi
+    honk_log refreshed
+}
+
+honk_splice_groups() {
+    local file="$1"
+    local fragment="$2"
+    local tmp
+    [ -f "$file" ] || return 0
+    tmp=$file.groups-tmp
+    awk -v frag="$fragment" '
+        BEGIN { skip = 0 }
+        $0 == "<!-- honk-groups-begin -->" { print; while ((getline line < frag) > 0) print line; skip = 1; next }
+        $0 == "<!-- honk-groups-end -->" { skip = 0 }
+        skip == 0 { print }
+    ' "$file" >"$tmp" && mv "$tmp" "$file"
+}
+
 honk_arm() {
     local minutes now pid
+    honk_export_config
+    honk_write_selections || true
     if [ -f "$(honk_state honk.armed)" ]; then
         honk_disarm restart
     fi
@@ -461,6 +540,7 @@ honk_mount_page() {
         cp "$HONK_MENU_SRC" "$HONK_MENU_TMP"
     fi
     honk_menu_insert "$HONK_MENU_TMP" "$page" || return 1
+    printf '%s\n' "$page" >"$HONK_PREFIX/page.name"
     if [ "$HONK_SKIP_MOUNT" = "1" ]; then
         return 0
     fi
@@ -477,7 +557,7 @@ honk_install_hooks() {
     nat="$HONK_SCRIPTS_DIR/nat-start"
     firewall="$HONK_SCRIPTS_DIR/firewall-start"
     honk_install_block "$event" "case \"\${1:-}:\${2:-}\" in
-  start:honk|stop:honk|restart:honk|start:honkconfirm)
+  start:honk|stop:honk|restart:honk|start:honkconfirm|start:honkrefresh)
     trap '' HUP
     $HONK_PREFIX/scripts/honk-event.sh \"\$1\" \"\$2\" >> $HONK_STATE_DIR/honk-event.log 2>&1 &
     ;;
