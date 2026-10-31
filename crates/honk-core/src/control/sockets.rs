@@ -50,6 +50,13 @@ pub(super) fn bind_tproxy_tcp(
     build_tproxy_tcp(addr, false)
 }
 
+/// Ordinary TCP listener. REDIRECT delivers to this address; `IP_TRANSPARENT`
+/// is not set, and the socket stays in the host network namespace.
+#[cfg(feature = "redirect")]
+pub(super) fn bind_plain_tcp(addr: SocketAddr) -> anyhow::Result<std::net::TcpListener> {
+    build_tproxy_tcp(addr, false)
+}
+
 /// Whether the daens namespace is fully set up (FD-owned namespace +
 /// policy routing live). Only real eBPF mode creates it (mock mode and
 /// tests stay entirely in the host netns), so this flag is the switch

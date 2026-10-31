@@ -101,34 +101,21 @@ impl ControlPlaneHandle {
     ) -> anyhow::Result<()> {
         debug!("TPROXY TCP connection from {}", client_addr);
 
-        let original_dst = match get_original_dst(&stream) {
-            Ok(d) => d,
-            Err(e) => {
-                // When the eBPF datapath delivers the SYN directly with
-                // bpf_sk_assign(), the kernel does not set SO_ORIGINAL_DST.
-                // The transparent socket's local address is the original
-                // destination, so fall back to that.
-                match stream.local_addr() {
-                    Ok(d) => {
-                        trace!(
-                            "SO_ORIGINAL_DST unavailable for {} ({}); using local_addr {}",
-                            client_addr, e, d
-                        );
-                        d
-                    }
-                    Err(le) => {
-                        debug!(
-                            "Failed to get original destination for {}: {}; local_addr also failed: {}",
-                            client_addr, e, le
-                        );
-                        return Err(anyhow::anyhow!(
-                            "original destination unavailable for {}: {} (local_addr: {})",
-                            client_addr,
-                            e,
-                            le
-                        ));
-                    }
-                }
+        // eBPF sk_assign leaves SO_ORIGINAL_DST unset and the local address is
+        // the original destination. REDIRECT's local address is the listener,
+        // so that fallback is refused once a redirect listener is installed.
+        let original_dst = match crate::redirect::resolve_original(
+            crate::redirect::bind_addr(),
+            get_original_dst(&stream),
+            stream.local_addr(),
+        ) {
+            Ok(dest) => dest,
+            Err(error) => {
+                debug!(
+                    "Failed to get original destination for {}: {}",
+                    client_addr, error
+                );
+                return Err(error);
             }
         };
         debug!("Original destination: {}", original_dst);
@@ -904,6 +891,13 @@ impl ControlPlaneHandle {
                         }
                     }
                     Err(e) => {
+                        if crate::redirect::active() {
+                            crate::redirect::relay_failure(
+                                original_dst,
+                                crate::redirect::dial_peer(node.host(), node.port, original_dst),
+                                &e,
+                            );
+                        }
                         let io_err = e.downcast_ref::<std::io::Error>();
                         if let Some(io_err) = io_err {
                             if relay::is_ignorable_connection_error(io_err) {

@@ -141,8 +141,9 @@ flowchart TB
 | `native-ui` | 否 | 隐含 `native-api`，为 `ui: embedded` 内嵌固定版本的 doona 发行资产；`ui: embedded-lite` 选择更轻量的 doona lite 预览版，同样需要该特性。运行时不解压、不下载、不构建前端。 |
 | `mimalloc` | 是 | 引入 `mimalloc` 与 `libmimalloc-sys`，并将 mimalloc 安装为 `honk-core` 二进制的 allocator。在 Linux 上，程序会在启动 Tokio 前为当前进程禁用透明大页，并把 mimalloc 的 purge 延迟设为 100 ms（除非 `MIMALLOC_PURGE_DELAY` 另有设置）。 |
 | `rprx` | 是 | 启用 `honk-outbound/rprx`，注册 VLESS 与 VMess Handler，包括受支持的 VLESS Encryption 和 `xtls-rprx-vision` 路径。 |
+| `redirect` | 否 | 增加 `--redirect IP:PORT`。该构建在普通 LAN 监听上接受 iptables nat REDIRECT 过来的 IPv4 TCP，用 `SO_ORIGINAL_DST` 还原原始目的地址，并走用户态路由。它拒绝真实 eBPF 数据面。不接受 UDP。 |
 
-`mock-ebpf` 不是 Cargo feature。不带 `ebpf` 的构建使用 `MockEbpfBackend`，`--mock-ebpf` 则显式选择无特权开发路径。若请求 `global.nfqueue_enable = true`，启动会记录 warning，仅在本进程关闭 NFQUEUE 暂存，配置文件保持不变。
+`mock-ebpf` 不是 Cargo feature。不带 `ebpf` 的构建使用 `MockEbpfBackend`，`--mock-ebpf` 则显式选择无特权开发路径。若请求 `global.nfqueue_enable = true`，启动会记录 warning，仅在本进程关闭 NFQUEUE 暂存，配置文件保持不变。`--redirect` 同样使用该 mock 后端，不创建网络命名空间，也不挂载 BPF。
 
 嵌入 eBPF 时，`build.rs` 使用内核 crate 固定的编译器及独立 release 策略重建，不继承 host 的 `RUSTFLAGS`、`CARGO_ENCODED_RUSTFLAGS` 或 `CARGO_PROFILE_*` 性能分析覆盖。编译器 sidecar 还必须不早于嵌入构建脚本，因此修改嵌入策略会使既有对象失效。显式 `--bpf-object` 资产及手动内核构建仍由调用方负责。
 

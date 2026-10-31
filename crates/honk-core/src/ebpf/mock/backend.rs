@@ -536,6 +536,13 @@ impl EbpfBackend for MockEbpfBackend {
         tuples: &TuplesKey,
         _errors: ebpf::TcpPinErrorSink,
     ) -> anyhow::Result<ebpf::TcpAdoption> {
+        if self.userspace_tcp {
+            return Ok(ebpf::TcpAdoption {
+                incarnation: 0,
+                handoff: None,
+                pin: ebpf::TcpPin::Model,
+            });
+        }
         #[cfg(test)]
         if self
             .adopt_proof_pending

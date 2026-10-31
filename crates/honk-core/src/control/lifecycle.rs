@@ -126,6 +126,20 @@ impl ControlPlane {
             .map(dns_listener::BoundDnsListener::bind)
             .transpose()
             .map_err(|error| anyhow::anyhow!("bind dns.bind listener: {error}"))?;
+        #[cfg(feature = "redirect")]
+        if let Some(addr) = crate::redirect::bind_addr() {
+            let tcp4_listener =
+                unsafe { tokio::io::unix::AsyncFd::register(bind_plain_tcp(addr)?) }?;
+            info!("redirect ingress listening on {addr}; UDP is not redirected");
+            return Ok(BoundListeners {
+                tcp4: tcp4_listener,
+                tcp6: None,
+                udp4: Vec::new(),
+                udp6: Vec::new(),
+                dns: bound_dns_listener,
+                nfqueue_enabled: false,
+            });
+        }
         let tcp4_addr = SocketAddr::new("0.0.0.0".parse()?, tproxy_port);
         let tcp6_addr = SocketAddr::new("::".parse()?, tproxy_port);
         let udp4_addr = tcp4_addr;

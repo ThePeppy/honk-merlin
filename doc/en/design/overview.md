@@ -131,8 +131,9 @@ flowchart TB
 | `native-ui` | no | Includes `native-api` and embeds assets from the pinned doona distribution for `ui: embedded`; `ui: embedded-lite` selects the lighter doona lite edition (preview) with the same feature requirement. No runtime extraction, download or frontend build. |
 | `mimalloc` | yes | Pulls in `mimalloc` and `libmimalloc-sys` and installs mimalloc as the `honk-core` binary allocator. On Linux, startup disables transparent huge pages for the process before starting Tokio, and sets mimalloc's purge delay to 100 ms unless `MIMALLOC_PURGE_DELAY` says otherwise. |
 | `rprx` | yes | Enables `honk-outbound/rprx`, which registers the VLESS and VMess handlers, including the supported VLESS Encryption and `xtls-rprx-vision` paths. |
+| `redirect` | no | Adds `--redirect IP:PORT`. That build accepts iptables nat REDIRECT'd IPv4 TCP on a plain LAN listener, recovers the original destination with `SO_ORIGINAL_DST`, and uses the userspace router. It refuses a real eBPF datapath. UDP is not accepted. |
 
-`mock-ebpf` is not a Cargo feature. A build without `ebpf` uses `MockEbpfBackend`, and `--mock-ebpf` selects the unprivileged development path explicitly. If `global.nfqueue_enable = true` is requested, startup logs a warning and disables NFQUEUE staging for that process; the config file is unchanged.
+`mock-ebpf` is not a Cargo feature. A build without `ebpf` uses `MockEbpfBackend`, and `--mock-ebpf` selects the unprivileged development path explicitly. If `global.nfqueue_enable = true` is requested, startup logs a warning and disables NFQUEUE staging for that process; the config file is unchanged. `--redirect` also uses that mock backend and does not create a namespace or attach BPF.
 
 When embedding eBPF, `build.rs` rebuilds with the kernel crate's pinned compiler and standalone release policy, not inherited host `RUSTFLAGS`, `CARGO_ENCODED_RUSTFLAGS` or `CARGO_PROFILE_*` profiling overrides. The compiler sidecar must be no older than the embedding build script, so an embedding-policy change invalidates previously built objects. Explicit `--bpf-object` artifacts and manual kernel builds remain the caller's responsibility.
 

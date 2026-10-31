@@ -30,6 +30,7 @@ pub(crate) mod netlink;
 #[cfg_attr(not(feature = "native-api"), path = "observe/inert.rs")]
 pub(crate) mod observe;
 pub mod pool;
+pub mod redirect;
 pub mod relay;
 pub mod routing;
 pub mod sniffing;
@@ -256,6 +257,14 @@ pub struct Cli {
     /// Use mock eBPF backend (for testing without kernel support)
     #[arg(long)]
     pub mock_ebpf: bool,
+
+    /// Accept iptables REDIRECT'd IPv4 TCP on this LAN address.
+    ///
+    /// The build needs the `redirect` feature. UDP is not accepted, and the
+    /// real eBPF datapath is refused. The port should be `global.tproxy_port`.
+    #[cfg(feature = "redirect")]
+    #[arg(long, value_name = "IP:PORT")]
+    pub redirect: Option<std::net::SocketAddr>,
 
     /// Where the administered configuration lives: the `-c` file tree, or the
     /// revisions in `<data-dir>/state/honk.db`
@@ -753,6 +762,15 @@ async fn abort_startup(
     error
 }
 
+fn mock_backend() -> Box<dyn ebpf::EbpfBackend> {
+    let mut backend = ebpf::mock::MockEbpfBackend::new();
+    #[cfg(feature = "redirect")]
+    if redirect::active() {
+        backend.enable_userspace_tcp();
+    }
+    Box::new(backend)
+}
+
 pub async fn run(cli: Cli) -> anyhow::Result<()> {
     #[cfg(feature = "native-api")]
     let started_at = std::time::SystemTime::now();
@@ -770,6 +788,14 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         "--store db needs the native-api feature"
     );
     let mock_mode = cli.mock_ebpf || cfg!(not(feature = "ebpf"));
+    #[cfg(feature = "redirect")]
+    if let Some(addr) = cli.redirect {
+        anyhow::ensure!(
+            mock_mode,
+            "--redirect refuses the eBPF datapath; build without the ebpf feature or pass --mock-ebpf"
+        );
+        redirect::install(addr)?;
+    }
     // Everything else in `run` drops before it.
     let _instance_lock = instance_lock(mock_mode)?;
     #[cfg(feature = "native-api")]
@@ -1083,7 +1109,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
             _dae0_guard = None;
         }
         info!("Using mock eBPF backend");
-        Box::new(ebpf::mock::MockEbpfBackend::new())
+        mock_backend()
     } else {
         #[cfg(feature = "ebpf")]
         {
@@ -1124,7 +1150,7 @@ pub async fn run(cli: Cli) -> anyhow::Result<()> {
         #[cfg(not(feature = "ebpf"))]
         {
             info!("eBPF feature not compiled in, using mock backend");
-            Box::new(ebpf::mock::MockEbpfBackend::new())
+            mock_backend()
         }
     };
     #[cfg(feature = "ebpf")]

@@ -149,6 +149,8 @@ pub struct MockEbpfBackend {
     pub telemetry_faults: std::sync::Arc<parking_lot::Mutex<MockTelemetryFaults>>,
     /// Whether TC entry points may redirect traffic into the control plane.
     pub datapath_ready: bool,
+    /// Accepted TCP has no kernel conn entry. Userspace routing owns it.
+    pub userspace_tcp: bool,
     pub admission_pressure: std::sync::Arc<std::sync::atomic::AtomicBool>,
     pub listener_sockets_published: bool,
     listener_socket_slots: HashMap<u32, std::os::fd::RawFd>,
@@ -199,6 +201,10 @@ impl MockEbpfBackend {
     /// Create a new mock backend.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn enable_userspace_tcp(&mut self) {
+        self.userspace_tcp = true;
     }
 
     pub fn capture_route_witness(&mut self, mut witness: KernelRouteWitness) -> u32 {
@@ -523,6 +529,29 @@ impl MockEbpfBackend {
             l4proto: buf[36],
             padding: [0; 3],
         }
+    }
+}
+
+#[cfg(test)]
+mod userspace_tcp {
+    use std::os::fd::AsFd;
+
+    use super::{EbpfBackend, MockEbpfBackend};
+    use honk_ebpf_common::TuplesKey;
+
+    #[test]
+    fn adopt_without_conn_state_hands_off_to_userspace() {
+        let mut backend = MockEbpfBackend::new();
+        backend.enable_userspace_tcp();
+        let adoption = backend
+            .adopt_tcp(
+                std::io::stdin().as_fd(),
+                &TuplesKey::default(),
+                Default::default(),
+            )
+            .expect("userspace tcp");
+        assert!(adoption.handoff.is_none());
+        assert_eq!(adoption.incarnation, 0);
     }
 }
 

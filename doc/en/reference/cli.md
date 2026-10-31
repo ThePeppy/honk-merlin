@@ -21,6 +21,7 @@ honk-core [OPTIONS] [COMMAND]
 | `--disable-timestamp` | Off | Omit the timestamp from console log lines. Use it under systemd or another logger that stamps each line itself; the file selected by `--log-file` or `global.log_file` keeps its timestamps. |
 | `-d`, `--debug` | Off | Select `debug` as the default console filter when `RUST_LOG` does not provide a valid filter. |
 | `--mock-ebpf` | Off | Use `MockEbpfBackend` instead of loading kernel eBPF. If `global.nfqueue_enable: true` is requested, honk logs a warning and disables NFQUEUE staging for this process. |
+| `--redirect IP:PORT` | Unset | Present only when honk-core is built with the `redirect` feature. Bind a plain IPv4 TCP listener on that LAN address and recover each client's original destination with `SO_ORIGINAL_DST`. The port should match `global.tproxy_port` (default 12345). UDP is not accepted. A real eBPF datapath is refused. |
 | `--store file\|db` | `file` | `db` runs from the revisions in `<data-dir>/state/honk.db` and imports `-c` into an empty db. See the [configuration db](./api.md#configuration-db---store-db). |
 | `--data-dir PATH` | `/var/lib/honk` | Data directory holding the state db, `state/honk.db`. It must equal `global.data_dir`. Used by `--store db`, `config export` and `admin reset`. |
 

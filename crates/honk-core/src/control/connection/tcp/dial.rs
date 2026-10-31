@@ -181,8 +181,8 @@ impl ControlPlaneHandle {
             );
         }
 
-        let mut last_err: Option<(String, String)> = None;
-        let mut first_err: Option<(String, String)> = None;
+        let mut last_err: Option<(String, String, String)> = None;
+        let mut first_err: Option<(String, String, String)> = None;
         let mut rejection = None;
         let mut timeout_count: usize = 0;
         let mut winner = None;
@@ -237,11 +237,12 @@ impl ControlPlaneHandle {
                         if msg.starts_with("dial timed out after") {
                             timeout_count += 1;
                         }
+                        let peer = crate::redirect::dial_peer(node.host(), node.port, target);
                         if first_err.is_none() {
-                            first_err = Some((msg.clone(), node.name.clone()));
+                            first_err = Some((msg.clone(), node.name.clone(), peer.clone()));
                         }
                         if remaining == 0 {
-                            last_err = Some((msg, node.name.clone()));
+                            last_err = Some((msg, node.name.clone(), peer));
                         }
                     }
                     Err(_join_err) => {}
@@ -438,9 +439,13 @@ impl ControlPlaneHandle {
                 observer: _native.1,
             }),
             None => {
-                if let Some((last_msg, last_name)) = last_err {
-                    let (first_msg, first_name) =
-                        first_err.unwrap_or_else(|| (last_msg.clone(), last_name.clone()));
+                if let Some((last_msg, last_name, last_peer)) = last_err {
+                    let (first_msg, first_name, _) = first_err.unwrap_or_else(|| {
+                        (last_msg.clone(), last_name.clone(), last_peer.clone())
+                    });
+                    if crate::redirect::active() {
+                        crate::redirect::relay_failure(target, &last_peer, &last_msg);
+                    }
                     if outbound_name == "direct" || outbound_name == "block" {
                         debug!(
                             "Direct/block dial to {} failed ({}): {}",

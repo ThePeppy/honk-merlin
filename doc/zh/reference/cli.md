@@ -21,6 +21,7 @@ honk-core [OPTIONS] [COMMAND]
 | `--disable-timestamp` | 关 | 控制台日志行不再带时间戳。在 systemd 或其他自带时间戳的日志系统下使用；`--log-file` 或 `global.log_file` 指定的文件仍带时间戳。 |
 | `-d`, `--debug` | 关 | 当 `RUST_LOG` 未提供有效过滤器时，选择 `debug` 作为默认控制台过滤器。 |
 | `--mock-ebpf` | 关 | 使用 `MockEbpfBackend`，不加载内核 eBPF。若配置请求 `global.nfqueue_enable: true`，honk 会记录警告并仅在本进程关闭 NFQUEUE 暂存。 |
+| `--redirect IP:PORT` | 未设置 | 仅在使用 `redirect` feature 构建 honk-core 时存在。在该 LAN 地址上绑定普通 IPv4 TCP 监听，并用 `SO_ORIGINAL_DST` 还原客户端的原始目的地址。端口应与 `global.tproxy_port` 相同（默认 12345）。不接受 UDP。拒绝真实 eBPF 数据面。 |
 | `--store file\|db` | `file` | `db` 从 `<data-dir>/state/honk.db` 中的修订版本加载配置，数据库为空时导入 `-c`。见[配置数据库](./api.md#配置数据库--store-db)。 |
 | `--data-dir PATH` | `/var/lib/honk` | 数据目录，状态数据库位于其下的 `state/honk.db`，必须与 `global.data_dir` 相同。供 `--store db`、`config export` 与 `admin reset` 使用。 |
 
