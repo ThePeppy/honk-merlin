@@ -1,8 +1,8 @@
-# AGENTS.md — honk
+# AGENTS.md — honk on RT-BE88U
 
-Agent guide to understanding, building, testing, and modifying honk. Repository layout/conventions last verified against the tree on 2026-08-09.
+Agent guide for this repository: an Asuswrt-Merlin addon that runs honk on the RT-BE88U, plus the engine sources it builds. The addon is `merlin/`. The engine rules further down still bind `crates/`. They are not a description of the router datapath.
 
-Re-read it when a conversation grows long or context is trimmed: a rule read once is not a rule in force. Never substitute memory or resemblance for evidence.
+Re-read this file when a conversation grows long or context is trimmed: a rule read once is not a rule in force. Never substitute memory or resemblance for evidence.
 
 <!-- task-routing:start -->
 ## Task routing
@@ -21,15 +21,22 @@ Re-read it when a conversation grows long or context is trimmed: a rule read onc
 
 Maintaining this guide: a rule that binds every change goes in this file; a subsystem's reference goes in its `.agents/rules/` file, in the section it belongs to. A new rules file gets a row in the routing table, and every file the table sends the reader to must exist. `.agents/tools/` describes the one-time extraction and is not re-run on later edits. The CI mechanical review drops its documentation reminder when either `AGENTS.md` or `.agents/rules/` changes alongside code.
 
-## Project overview
+## This repository
 
-`honk` is a Rust transparent-proxy engine for Linux, **inspired by** [dae](https://github.com/daeuniverse/dae) (eBPF datapath and configuration surface) and [sing-box](https://github.com/SagerNet/sing-box) (outbound groups, multi-protocol dialers, Clash-compatible API). It is not a line-for-line port of either: the kernel path uses TC hooks with a restricted native-BPF routing policy compiled from userspace, while the userspace outbound/control stack follows sing-box-oriented designs.
+The product is the RT-BE88U addon, not a general Linux eBPF gateway. The router page only starts, restarts, and stops the process. Subscriptions, nodes, groups, rules, and the config file are edited in doona on port 9090, not on that page. The captured page is `merlin/router-admin.png` (firmware 3006.102.9, wireless-router mode). Boot does not arm the intercept. Stop removes it and restores Broadcom flow cache. nvram is not edited.
 
-- `honk-core` intercepts via TC redirect and userspace proxy relay. Ambiguous LAN UDP uses default-on NFQUEUE 320 when prerequisites pass (`global.nfqueue_enable: false` disables; see `.agents/rules/configuration.md`). Its owned nftables table/chain installs no global `iptables` TPROXY rules.
-- `honk-config` provides shared types/parsers for original dae `{ section { ... } }`, the primary and only documented config syntax.
-- Status: **experimental alpha**. Expect breaking changes.
-- License: **GPL-3.0-only**. Repository: <https://github.com/daeuniverse/honk>
-- Docs: `README.md` / `README.zh.md` (bilingual overview, feature checklist, TODO list); matching `doc/en/` / `doc/zh/` trees under `doc/`, indexed by bilingual `doc/README.md`. Each has `configuration.md`, `design/` (overview/datapath/routing/nfqueue/control-plane/dns/outbound/groups), `reference/` (global/nodes/groups/routing/dns/subscription/assets/experimental/api/cli), and `operations/` runbooks; per-release configuration changes that affect an existing configuration live in `doc/migration/{en,zh}/<tag>.md` (one file per release tag). Lab benchmark tooling, evidence, and bilingual docs live only on `bench`.
+On this machine the datapath is IPv4 TCP REDIRECT:
+
+- `PREROUTING` jumps to `HONK_PRE`. That chain returns traffic to the router itself, the LAN prefix, TCP/53, TCP/9090, and `10/8`, `172.16/12`, `192.168/16`, `100.64/10`. The last rule redirects other `br0` TCP to `<lan-ip>:<tproxy_port>` (12345 when unset). The port name is historical. Do not install TPROXY.
+- iptables does not choose direct versus proxy. `honk-core --redirect` reads `SO_ORIGINAL_DST` and applies `config.dae`.
+- UDP is not redirected. `firewall-start` rejects LAN UDP/443 so QUIC falls back to TCP. Other UDP stays on the kernel path. IPv6 is not intercepted.
+- Do not load eBPF or add a TUN mode on this router to change policy. The 4.19 kernel here is not that datapath.
+- dnsmasq forwards to `127.0.0.1#5354`. `dns.bind` is `127.0.0.1:5354`. Port 5353 is avahi. `honk_install` does not copy `dnsmasq.postconf` to `/jffs/scripts`.
+- `/jffs` is about 45 MiB. Do not leave `bak-*`, AppleDouble `._*` files, or extra config copies on the router.
+
+Operator detail is `merlin/README_merlin.md`. The schema note is `docs/merlin-config.md`. `sh merlin/build.sh` writes `merlin/dist/honk-be88u.tar.gz`.
+
+The sections below are the honk engine that `honk-core` implements on a normal Linux host. That engine is experimental alpha. License: **GPL-3.0-only**. Upstream: <https://github.com/daeuniverse/honk>. Docs for the engine remain `doc/en/` and `doc/zh/`.
 
 ## Repository layout
 
