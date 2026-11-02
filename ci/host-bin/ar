@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shadow host /usr/bin/ar so cmake's find_program picks an ELF-capable archiver.
+exec "$(CDPATH= cd "$(dirname "$0")/.." && pwd)/zigar" "$@"

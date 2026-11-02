@@ -1,0 +1,5 @@
+#!/bin/sh
+# llvm-ar via zig. Host /usr/bin/ar on macOS writes a Darwin SYMDEF-only
+# archive when given ELF objects, so every sys crate's .a is 96 bytes and
+# the final musl link has no native symbols.
+exec zig ar "$@"

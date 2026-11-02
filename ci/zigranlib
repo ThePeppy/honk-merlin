@@ -1,0 +1,3 @@
+#!/bin/sh
+# llvm-ranlib via zig. Pair with ci/zigar — macOS ranlib rejects ELF archives.
+exec zig ranlib "$@"

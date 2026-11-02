@@ -21,8 +21,19 @@ L=$(printf '%s' "$T" | tr '-' '_')
 U=$(printf '%s' "$T" | tr 'a-z-' 'A-Z_')
 eval "export CC_${L}=\$root/ci/zigcc"
 eval "export CXX_${L}=\$root/ci/zigcxx"
+eval "export AR_${L}=\$root/ci/zigar"
+eval "export RANLIB_${L}=\$root/ci/zigranlib"
 eval "export CARGO_TARGET_${U}_LINKER=\$root/ci/zigcc"
 eval "export CARGO_TARGET_${U}_RUSTFLAGS='-C link-self-contained=no'"
+# cmake (boring-sys) and cc-rs both fall back to host ar/ranlib when unset.
+# On macOS those write empty Darwin archives for ELF objects.
+export AR="$root/ci/zigar"
+export RANLIB="$root/ci/zigranlib"
+export CMAKE_AR="$root/ci/zigar"
+export CMAKE_RANLIB="$root/ci/zigranlib"
+# cmake ignores CMAKE_AR as an env var and find_program()s `ar` on PATH.
+export PATH="$root/ci/host-bin:$PATH"
+export CMAKE_ARGS="-DCMAKE_AR=$root/ci/zigar -DCMAKE_RANLIB=$root/ci/zigranlib -DCMAKE_C_COMPILER_AR=$root/ci/zigar -DCMAKE_CXX_COMPILER_AR=$root/ci/zigar -DCMAKE_ASM_COMPILER_AR=$root/ci/zigar -DCMAKE_C_COMPILER_RANLIB=$root/ci/zigranlib -DCMAKE_CXX_COMPILER_RANLIB=$root/ci/zigranlib -DCMAKE_ASM_COMPILER_RANLIB=$root/ci/zigranlib"
 BINDGEN_EXTRA_CLANG_ARGS="$(ci/zig-bindgen-env "$ZIGCC_TARGET")"
 export BINDGEN_EXTRA_CLANG_ARGS
 cargo build --release -p honk-core --no-default-features \

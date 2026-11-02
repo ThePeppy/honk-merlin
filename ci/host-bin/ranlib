@@ -1,0 +1,3 @@
+#!/bin/sh
+# Shadow host /usr/bin/ranlib. Pair with ci/host-bin/ar.
+exec "$(CDPATH= cd "$(dirname "$0")/.." && pwd)/zigranlib" "$@"
