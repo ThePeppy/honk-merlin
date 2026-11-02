@@ -737,26 +737,23 @@ honk_menu_section_body() {
 EOF
 }
 
-# Find the standalone "{" line that opens the stock section holding the given
-# index. Merlin 3006.102 builds use numeric dictionary tokens such as <#613#>
-# for display names, but index strings are plain and stable, and whitespace
-# around the colon is not. Anything but exactly one anchor leaves the file
-# untouched.
-honk_menu_section_start() {
+# YEAR20 sidebar: exactly two menu_Split headers. The first opens
+# 一般设置 (3006.102 dictionary <#583#>, named-token trees
+# <#menu5_1_1#>). The second opens 高级设置 (<#581#> / <#menu5#>).
+# Display names are not stable across dictionaries, so the insert
+# point is the standalone "{" of the second of those two objects.
+# Any other count leaves the file untouched.
+honk_menu_advanced_split_start() {
     local file="$1"
-    local index="$2"
-    local anchor opener
-    if ! anchor=$(awk -v idx="$index" '
+    local opener
+    if ! opener=$(awk '
         { s = $0; gsub(/[[:space:]]/, "", s) }
-        index(s, "index:\"" idx "\"") > 0 { n++; line = NR }
-        END { if (n == 1) print line; else exit 2 }
-    ' "$file"); then
-        honk_log menu_anchor_not_found
-        return 1
-    fi
-    if ! opener=$(awk -v after="$anchor" '
-        NR < after { s = $0; gsub(/[[:space:]]/, "", s); if (s == "{") b = NR }
-        END { if (b) print b; else exit 2 }
+        s == "{" { b = NR }
+        index(s, "index:\"menu_Split\"") > 0 {
+            n++
+            if (n == 2) line = b
+        }
+        END { if (n == 2 && line) print line; else exit 2 }
     ' "$file"); then
         honk_log menu_anchor_not_found
         return 1
@@ -767,7 +764,7 @@ honk_menu_section_start() {
 honk_menu_insert() {
     local file="$1"
     local page="$2"
-    local start tmp count before after
+    local start tmp count after
     case $page in
         user[0-9].asp|user[0-9][0-9].asp) ;;
         *) return 1 ;;
@@ -780,8 +777,7 @@ honk_menu_insert() {
     awk 'index($0, "tabName: \"Honk\"") == 0 { print }' "$file" >"$tmp"
     mv "$tmp" "$file"
     grep -q 'return menuTree' "$file" || { honk_log menu_anchor_not_found; return 1; }
-    start=$(honk_menu_section_start "$file" menu_Setting) || return 1
-    before=$(grep -c 'index: "menu_Setting"' "$file" || true)
+    start=$(honk_menu_advanced_split_start "$file") || return 1
     honk_menu_section_body "$page" >"$file.section"
     tmp=$file.honk-tmp
     awk -v at="$start" '
@@ -790,9 +786,11 @@ honk_menu_insert() {
         { print }
     ' "$file.section" "$file" >"$tmp" || { rm -f "$tmp" "$file.section"; return 1; }
     rm -f "$file.section"
-    after=$(grep -c 'index: "menu_Setting"' "$tmp" || true)
+    after=$(honk_menu_advanced_split_start "$tmp") || { rm -f "$tmp"; honk_log menu_anchor_not_found; return 1; }
     count=$(grep -c 'index: "menu_Honk"' "$tmp" || true)
-    if [ "$count" != "1" ] || [ "$before" != "$after" ] || ! grep -q 'return menuTree' "$tmp"; then
+    # Insertion is in front of the split, so the opener line number grows
+    # by the Honk section. The split object itself must still resolve once.
+    if [ "$count" != "1" ] || [ -z "$after" ] || ! grep -q 'return menuTree' "$tmp"; then
         rm -f "$tmp"
         honk_log menu_anchor_not_found
         return 1

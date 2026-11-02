@@ -296,19 +296,47 @@ if grep -q '^listen' "$binlog"; then
 fi
 [ ! -f "$work/state/honk.armed" ] || fail "boot left an arm token"
 
-# The stock menu shape: menuTree.list holds top-level sections, each with a
-# plain index string and a tab array. Honk must become its own section placed
-# before the Administration section, whose index is the stable anchor.
+# YEAR20 sidebar: two menu_Split headers. The first opens General
+# Settings, the second Advanced Settings. Display names vary by
+# dictionary; Honk is inserted immediately before the second of
+# exactly two splits, last in General, never under Advanced.
+menu_index_order() {
+    awk '{
+        s = $0
+        gsub(/[[:space:]]/, "", s)
+        p = index(s, "index:\"")
+        if (p == 0) next
+        s = substr(s, p + 7)
+        p = index(s, "\"")
+        if (p == 0) next
+        print substr(s, 1, p - 1)
+    }' "$1"
+}
+
 cat >"$work/menu.js" <<'EOF'
 define(function(){
 var menuTree = {
 list: [
+{
+menuName: "<#menu5_1_1#>",
+index: "menu_Split",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
+]
+},
 {
 menuName: "AiMesh",
 index: "menu_AiMesh",
 tab: [
 {url: "AiMesh.asp", tabName: "AiMesh"},
 {url: "NULL", tabName: "__INHERIT__"}
+]
+},
+{
+menuName: "<#menu5#>",
+index: "menu_Split",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
 ]
 },
 {
@@ -333,17 +361,26 @@ honk_menu_insert "$work/menu.js" user3.asp || fail "menu insert twice"
 [ "$(grep -c 'index: "menu_Honk"' "$work/menu.js")" = 1 ] || fail "Honk section count drifted"
 grep -q 'return menuTree' "$work/menu.js" || fail "menu wrapper lost"
 grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu.js" || fail "exclude list was treated as the anchor"
-ln=$(grep -n 'index: "menu_Honk"' "$work/menu.js" | cut -d: -f1)
-sl=$(grep -n 'index: "menu_Setting"' "$work/menu.js" | cut -d: -f1)
-[ "$ln" -lt "$sl" ] || fail "Honk section was not placed before the System section"
+[ "$(menu_index_order "$work/menu.js" | tr '\n' ' ')" = "menu_Split menu_AiMesh menu_Honk menu_Split menu_Setting " ] || fail "Honk was not placed last in General Settings"
 grep -q '{url: "user3.asp", tabName: "Honk"}' "$work/menu.js" || fail "Honk tab lost the page slot"
 honk_menu_remove "$work/menu.js" || fail "menu remove failed"
 [ "$(grep -c 'index: "menu_Honk"' "$work/menu.js")" = 0 ] || fail "Honk section survived removal"
 [ "$(grep -c 'index: "menu_Setting"' "$work/menu.js")" = 1 ] || fail "System section was damaged by removal"
+[ "$(grep -c 'index: "menu_Split"' "$work/menu.js")" = 2 ] || fail "split headers were damaged by removal"
 grep -q 'return menuTree' "$work/menu.js" || fail "menu wrapper lost on removal"
 cat >"$work/menu-ws.js" <<'EOF'
 var menuTree = {
 list: [
+{
+   menuName   :   "<#menu5_1_1#>" ,
+   index   :   "menu_Split" ,
+   tab: [ { url : "NULL" , tabName: "__HIDE__" } ]
+},
+{
+   menuName   :   "<#menu5#>" ,
+   index   :   "menu_Split" ,
+   tab: [ { url : "NULL" , tabName: "__HIDE__" } ]
+},
 {
    menuName   :   "<#613#>" ,
    index   :   "menu_Setting" ,
@@ -356,11 +393,26 @@ EOF
 honk_menu_insert "$work/menu-ws.js" user5.asp || fail "whitespace anchor was rejected"
 honk_menu_insert "$work/menu-ws.js" user5.asp || fail "whitespace re-insert was rejected"
 [ "$(grep -c 'tabName: "Honk"' "$work/menu-ws.js")" = 1 ] || fail "whitespace anchor inserted the wrong number of tabs"
+[ "$(menu_index_order "$work/menu-ws.js" | tr '\n' ' ')" = "menu_Split menu_Honk menu_Split menu_Setting " ] || fail "whitespace insert missed General Settings"
 # An install from the older layout must clean its one-line tab while keeping
 # the stock System section intact.
 cat >"$work/menu-legacy.js" <<'EOF'
 var menuTree = {
 list: [
+{
+menuName: "<#menu5_1_1#>",
+index: "menu_Split",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
+]
+},
+{
+menuName: "<#menu5#>",
+index: "menu_Split",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
+]
+},
 {
 menuName: "<#613#>",
 index: "menu_Setting",
@@ -378,6 +430,7 @@ honk_menu_insert "$work/menu-legacy.js" user3.asp || fail "legacy layout insert 
 [ "$(grep -c 'tabName: "Honk"' "$work/menu-legacy.js")" = 1 ] || fail "legacy tab survived alongside the new section"
 [ "$(grep -c 'url: "user1.asp"' "$work/menu-legacy.js")" = 0 ] || fail "legacy tab line survived"
 [ "$(grep -c 'index: "menu_Setting"' "$work/menu-legacy.js")" = 1 ] || fail "legacy insert damaged the System section"
+[ "$(menu_index_order "$work/menu-legacy.js" | tr '\n' ' ')" = "menu_Split menu_Honk menu_Split menu_Setting " ] || fail "legacy insert left Honk under Advanced"
 honk_menu_remove "$work/menu-legacy.js" || fail "legacy layout remove failed"
 [ "$(grep -c 'tabName: "Honk"' "$work/menu-legacy.js")" = 0 ] || fail "legacy remove left the new section"
 mkdir -p "$work/www"
@@ -386,14 +439,21 @@ var menuTree = {
 list: [
 {
 menuName: "a",
-index: "menu_Setting",
+index: "menu_Split",
 tab: [
 {url: "NULL", tabName: "__HIDE__"}
 ]
 },
 {
 menuName: "b",
-index: "menu_Setting",
+index: "menu_Split",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
+]
+},
+{
+menuName: "c",
+index: "menu_Split",
 tab: [
 {url: "NULL", tabName: "__HIDE__"}
 ]
@@ -417,6 +477,29 @@ fi
 after=$(md5sum <"$work/menu-missing.js")
 [ "$before" = "$after" ] || fail "missing anchor modified the menu"
 grep -q menu_anchor_not_found "$work/menu-missing.err" || fail "missing anchor was silent"
+# Administration alone is the Advanced Settings group; that must not become
+# the insert point on a file that lacks the YEAR20 split headers.
+cat >"$work/menu-admin-only.js" <<'EOF'
+var menuTree = {
+list: [
+{
+menuName: "<#613#>",
+index: "menu_Setting",
+tab: [
+{url: "Advanced_System_Content.asp", tabName: "<#613#>"}
+]
+}
+]
+};
+return menuTree;
+EOF
+before=$(md5sum <"$work/menu-admin-only.js")
+if honk_menu_insert "$work/menu-admin-only.js" user7.asp 2>"$work/menu-admin-only.err"; then
+    fail "Administration-only menu was accepted as the General Settings anchor"
+fi
+after=$(md5sum <"$work/menu-admin-only.js")
+[ "$before" = "$after" ] || fail "Administration-only menu was modified"
+grep -q menu_anchor_not_found "$work/menu-admin-only.err" || fail "Administration-only menu was silent"
 
 # The sidebar icon is a best-effort append to the site-wide style sheet.
 printf '%s\n' 'body { background: #000; }' >"$work/www/index_style.css"
@@ -521,6 +604,20 @@ cat >"$work/menu-install.js" <<'EOF'
 var menuTree = {
 list: [
 {
+menuName: "<#menu5_1_1#>",
+index: "menu_Split",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
+]
+},
+{
+menuName: "<#menu5#>",
+index: "menu_Split",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
+]
+},
+{
 menuName: "<#613#>",
 index: "menu_Setting",
 tab: [
@@ -547,9 +644,7 @@ if grep -q menu_anchor_not_found "$work/install-ok.err"; then
 fi
 [ "$(grep -c 'tabName: "Honk"' "$work/menu-install-tmp.js")" = 1 ] || fail "install did not leave one Honk tab"
 grep -q '{url: "user1.asp", tabName: "Honk"}' "$work/menu-install-tmp.js" || fail "Honk section lost the allocated slot"
-ln=$(grep -n 'index: "menu_Honk"' "$work/menu-install-tmp.js" | cut -d: -f1)
-sl=$(grep -n 'index: "menu_Setting"' "$work/menu-install-tmp.js" | cut -d: -f1)
-[ "$ln" -lt "$sl" ] || fail "install placed Honk outside the top-level list"
+[ "$(menu_index_order "$work/menu-install-tmp.js" | tr '\n' ' ')" = "menu_Split menu_Honk menu_Split menu_Setting " ] || fail "install placed Honk outside General Settings"
 grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu-install-tmp.js" || fail "install treated the exclude list as the anchor"
 grep -q 'menu_Honk' "$work/install-style-tmp.css" || fail "install did not mount the icon rule"
 

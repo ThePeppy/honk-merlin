@@ -9,7 +9,7 @@
 - SNBForums 上的 amtm 输出：`ASUS RT-BE88U HW: aarch64 Kernel: 4.19.294`，固件 `3006.102.3`。
 - Merlin `release/src/router/Makefile`：`HND_ROUTER_BE_4916` 默认 `LINUX_KERNEL=4.19.235`；只有 `ASUSWRT_BRCM_SDK_VERSION` 为 `WIFI7_SDK_20250506` 时才是 `5.15.167`。
 - Merlin 树里的 `release/src-rt-5.04behnd.4916/kernel/linux-4.19/config_base.6a.6813` 文件头是 `Linux/arm64 4.19.294`。其中 `CONFIG_BPF=y`，但 `CONFIG_BPF_SYSCALL`、`CONFIG_CGROUPS`、`CONFIG_NAMESPACES` 都未打开。`CONFIG_IP_NF_TARGET_REDIRECT=y`。`CONFIG_NETFILTER_XT_TARGET_TPROXY=m`，同时 `CONFIG_NF_TPROXY_IPV4` 未打开，所以不能把 TPROXY 当成可用。`CONFIG_TUN=m`。`CONFIG_NF_CT_NETLINK=y`，`CONFIG_IKCONFIG_PROC=y`。
-- 插件页用的是 Merlin `helper.sh` 的 `am_get_webui_page` / `am_settings_set`，以及 `services-start`、`nat-start`、`firewall-start`、`service-event`。当前 `menuTree.js` 里没有 `Tools_OtherSettings.asp`。页签插在只出现一次的 `url: "Advanced_System_Content.asp"` 后面。3006.102 的 `menuTree.js` 用数字词典，例如 `<#613#>`，不要求 `<#menu5_6_2#>`。这一行不是恰好一次时，安装记 `menu_anchor_not_found` 并且不会报 `installed`。
+- 插件页用的是 Merlin `helper.sh` 的 `am_get_webui_page` / `am_settings_set`，以及 `services-start`、`nat-start`、`firewall-start`、`service-event`。一级菜单 Honk 插在两条 `index: "menu_Split"` 里的第二条（高级设置标题；3006.102 词典是 `<#581#>`）前面，作为一般设置的最后一项。不是恰好两条时，安装记 `menu_anchor_not_found` 并且不会报 `installed`。
 - `service-event` 里的 ash 没有 `command`，裸文件名的 `[ -x ]` 也不会搜 PATH。conntrack、iptables、ip、nvram、ping、curl、logger 在 `/usr/sbin`、`/usr/bin`、`/sbin`、`/opt/sbin`、`/opt/bin` 里按绝对路径查找。Enable 被拒绝时，页面重新载入并显示原因，例如 conntrack 不可用。
 - 必须已有 `config.dae`。Enable 启动 `honk-core -c config.dae --redirect <局域网地址>:<tproxy_port>`。订阅由 honk-core 用自己的 User-Agent 拉取，内容是 base64 的 `ss://` 列表。面板是 `http://192.168.2.1:9090/ui/`，安装包里已经放好界面文件。解除时只按 pid 文件结束监听和看门狗，conntrack 删除最多等几秒。
 
@@ -110,5 +110,5 @@ sh merlin/build.sh
 - 固件是否自带 `conntrack` 命令。内核有 `CONFIG_NF_CT_NETLINK`，用户态工具不一定在。
 - 更新的 SDK 可能把 BE88U 切到 5.15。探测能看出来，插件仍然不会加载 eBPF。
 - 启用时执行 `fc disable` 和 `fc flush`（有 `runner` 就 disable），并记下之前是开还是关。停用时只在原先为开的情况下 `fc enable` 并 flush。不改 nvram。
-- 一级菜单锚点写死在 `index: "menu_Setting"`（系统管理 section；index 是纯字符串，3006.102 的数字词典 token 只影响显示名）。锚点不是恰好一次时，安装不会改 `menuTree.js`。
+- 一级菜单锚点写死为「恰好两条 `index: "menu_Split"` 里的第二条」（高级设置标题）。Honk 插在它前面，作为一般设置的最后一项。显示名随词典变化（3006.102 是 `<#581#>` / `<#583#>`），所以不用 menuName。不是恰好两条时，安装不会改 `menuTree.js`。
 - UDP 不进 honk。`firewall-start` 拒绝局域网发往 UDP/443 的包，让浏览器改走 TCP。其它 UDP 仍走原来的路径。

@@ -29,7 +29,7 @@ The panel is `http://192.168.2.1:9090/ui/`.
 
 ## Web UI and install
 
-The addon adds a top-level `Honk` entry to the router sidebar (own icon, one page, no tab strip) instead of a tab inside Administration. It copies `/www/require/modules/menuTree.js` to `/tmp`, inserts one section before the stable `index: "menu_Setting"` anchor, and bind-mounts the copy; one icon rule is appended to a bind-mounted copy of `/www/index_style.css` the same way. Any anchor mismatch leaves the stock files untouched and fails the install with `menu_anchor_not_found`.
+The addon adds a top-level `Honk` entry to the router sidebar (own icon, one page, no tab strip) as the last item under General Settings. It copies `/www/require/modules/menuTree.js` to `/tmp`, inserts one section immediately before the second of the two `index: "menu_Split"` headers (Advanced Settings; 3006.102 dictionary `<#581#>`, named-token trees `<#menu5#>`), and bind-mounts the copy; one icon rule is appended to a bind-mounted copy of `/www/index_style.css` the same way. Any count other than two splits leaves the stock files untouched and fails the install with `menu_anchor_not_found`.
 
 Install from SSH with one command; re-running it upgrades in place:
 
