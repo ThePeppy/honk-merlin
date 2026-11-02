@@ -31,9 +31,13 @@ cargo build --release -p honk-core --no-default-features \
 
 bin=$root/target/$T/release/honk-core
 file "$bin" | grep -q 'statically linked'
+# The installer prints this when the addon lands. Only merlin-v* tags count
+# as addon versions; engine v* tags and the rolling merlin tag must not.
+ver=$(git describe --tags --always --match 'merlin-v*' 2>/dev/null || echo dev)
 stage=$(mktemp -d)
 mkdir -p "$stage/honk/scripts" "$stage/honk/www" "$stage/honk/ui"
 cp "$bin" "$stage/honk/honk-core"
+printf '%s\n' "$ver" >"$stage/honk/version"
 cp -R "$root/merlin/scripts/." "$stage/honk/scripts/"
 cp -R "$root/merlin/www/." "$stage/honk/www/"
 cp "$root/merlin/README_merlin.md" "$stage/honk/README_merlin.md"

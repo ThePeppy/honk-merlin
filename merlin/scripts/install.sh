@@ -6,3 +6,8 @@ HONK_SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$HONK_SCRIPT_DIR/honk-common.sh"
 honk_install
+if [ -f "$HONK_PREFIX/version" ]; then
+    echo "honk addon ($(cat "$HONK_PREFIX/version")) installed successfully!"
+else
+    echo "honk addon installed successfully!"
+fi
