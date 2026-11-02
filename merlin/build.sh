@@ -1,6 +1,6 @@
 #!/bin/sh
 # Cross-compile honk-core for the RT-BE88U (aarch64 musl, no eBPF) and pack
-# the addon: binary, scripts, page, zashboard, and geo databases.
+# the addon: binary, scripts, page, pinned doona, and cn/private geo.
 set -eu
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
@@ -37,7 +37,7 @@ export CMAKE_ARGS="-DCMAKE_AR=$root/ci/zigar -DCMAKE_RANLIB=$root/ci/zigranlib -
 BINDGEN_EXTRA_CLANG_ARGS="$(ci/zig-bindgen-env "$ZIGCC_TARGET")"
 export BINDGEN_EXTRA_CLANG_ARGS
 cargo build --release -p honk-core --no-default-features \
-    --features clash-api,native-api,mimalloc,rprx,redirect \
+    --features native-api,mimalloc,redirect \
     --target "$T"
 
 bin=$root/target/$T/release/honk-core
@@ -46,15 +46,16 @@ file "$bin" | grep -q 'statically linked'
 # as addon versions; engine v* tags and the rolling merlin tag must not.
 ver=$(git describe --tags --always --match 'merlin-v*' 2>/dev/null || echo dev)
 stage=$(mktemp -d)
-mkdir -p "$stage/honk/scripts" "$stage/honk/www" "$stage/honk/ui"
+mkdir -p "$stage/honk/scripts" "$stage/honk/www"
 cp "$bin" "$stage/honk/honk-core"
 printf '%s\n' "$ver" >"$stage/honk/version"
-cp -R "$root/merlin/scripts/." "$stage/honk/scripts/"
+cp "$root/merlin/scripts/"*.sh "$stage/honk/scripts/"
 cp -R "$root/merlin/www/." "$stage/honk/www/"
 cp "$root/merlin/README_merlin.md" "$stage/honk/README_merlin.md"
 python3 "$root/merlin/tools/fetch-assets.py" "$stage/honk"
 chmod 755 "$stage/honk/honk-core" "$stage/honk/scripts/"*.sh
 mkdir -p "$root/merlin/dist"
-tar -C "$stage" -czf "$root/merlin/dist/honk-be88u.tar.gz" honk
+# macOS tar otherwise injects AppleDouble `._*` members that waste /jffs.
+COPYFILE_DISABLE=1 tar -C "$stage" -czf "$root/merlin/dist/honk-be88u.tar.gz" honk
 rm -rf "$stage"
 echo "wrote $root/merlin/dist/honk-be88u.tar.gz"

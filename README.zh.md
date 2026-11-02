@@ -53,7 +53,7 @@ flowchart TD
 
 操作步骤在 [merlin/README_merlin.md](merlin/README_merlin.md)。插件短说明在 [merlin/README.md](merlin/README.md)。配置字段在 [docs/merlin-config.md](docs/merlin-config.md)。
 
-`sh merlin/build.sh` 产出 `merlin/dist/honk-be88u.tar.gz`：不带 eBPF 的静态 `aarch64-unknown-linux-musl` `honk-core`、界面、`geoip.dat`、`geosite.dat`、脚本和这个页面。
+`sh merlin/build.sh` 产出 `merlin/dist/honk-be88u.tar.gz`：不带 eBPF / Clash / VLESS 的静态 `aarch64-unknown-linux-musl` `honk-core`、pinned doona、只含 `cn` 和 `private` 的 geo、脚本和这个页面。
 
 ## 许可证
 

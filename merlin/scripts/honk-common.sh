@@ -1047,6 +1047,8 @@ honk_install() {
             cp "$src/geosite.dat" "$HONK_PREFIX/geosite.dat"
         fi
     fi
+    rm -f "$HONK_PREFIX/scripts/honk-nodes-sync.sh" \
+        "$HONK_PREFIX/scripts/dnsmasq.postconf"
     chmod 755 "$HONK_PREFIX/scripts/"*.sh
     honk_install_hooks
     honk_disarm boot_off

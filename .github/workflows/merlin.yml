@@ -73,6 +73,7 @@ jobs:
         run: |
           bash merlin/tests/safety.sh
           python3 merlin/tools/test_surge2honk.py
+          python3 merlin/tools/test_fetch_assets.py
 
   # One rolling release owns the stable download URL. It must stay a
   # prerelease and never "latest", or every addon tag would steal

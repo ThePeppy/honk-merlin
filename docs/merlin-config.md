@@ -190,23 +190,30 @@ routing {
 
 ## 面板
 
-在现有 `config.dae` 末尾加上（密钥留空时，局域网里的人可以调用这个 API）：
+在现有 `config.dae` 末尾加上。密钥放在单独的 0600 include 里，这样 `config_write` 才能改主文件：
 
 ```dae
+include {
+    'secrets.dae'
+}
+
 experimental {
-    clash_api {
-        external_controller: '192.168.2.1:9090'
-        external_ui: '/jffs/addons/honk/ui'
+    native_api {
+        enabled: true
+        listen: '192.168.2.1:9090'
+        allow_origins: 'http://192.168.2.1:9090'
+        config_write: true
+        ui: '/jffs/addons/honk/ui'
     }
 }
 ```
 
-面板地址是 `http://192.168.2.1:9090/ui/`。安装包里已经放好 zashboard，所以不必再从 GitHub 下载。策略组在面板里选。
+`secrets.dae` 只放 `experimental.native_api.secret`，权限 0600。不要写 `password_auth`：有密钥就不能再开密码登录。面板地址是 `http://192.168.2.1:9090/ui/`。安装包里已经放好 pinned doona。本插件二进制没有 Clash API，不要再写 `clash_api`。
 
 ## Merlin 插件这一阶段不做什么
 
 - UDP 不进 REDIRECT。`firewall-start` 在 FORWARD 拒绝局域网 UDP/443，让 QUIC 回落到被 REDIRECT 的 TCP；其它 UDP 直接出去。发往路由器的 TCP 53 也会在 REDIRECT 之前 RETURN。`merlin/scripts/dnsmasq.postconf` 只是路由器上现有的文件，把 dnsmasq 上游指到 `127.0.0.1#5354`。5353 是 avahi 的 mDNS，honk 绑不上。`config.dae` 里要写 `dns.bind: '127.0.0.1:5354'`。`honk_install` 不会把 postconf 拷到 `/jffs/scripts`。
-- 安装包带有 `geoip.dat` 和 `geosite.dat`。启动时 `DAE_LOCATION_ASSET` 指向 `/jffs/addons/honk`，`dip(geoip:...)` 和 `domain(geosite:...)` 可以离线命中。
+- 安装包里 `geoip.dat` / `geosite.dat` 只含 `cn` 和 `private`。启动时 `DAE_LOCATION_ASSET` 指向 `/jffs/addons/honk`。`geoip:private` 本身是 honk 内置列表；dat 里仍保留该码以免规则写到文件。其它 geosite/geoip 代码没有条目。
 - 发往 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16`、`100.64.0.0/10` 以及路由器自己地址的 TCP，在进入 honk 之前就 RETURN。
 - 没有 `config.dae` 时不会启用。订阅由 honk-core 自己拉取，使用它的默认 User-Agent，内容是 base64 的 `ss://` 列表。
 - 启用期间会 `fc disable` 并 `fc flush`（有 `runner` 时同样 disable），停用时恢复启用前的状态。

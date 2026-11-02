@@ -34,7 +34,7 @@ On this machine the datapath is IPv4 TCP REDIRECT:
 - dnsmasq forwards to `127.0.0.1#5354`. `dns.bind` is `127.0.0.1:5354`. Port 5353 is avahi. `honk_install` does not copy `dnsmasq.postconf` to `/jffs/scripts`.
 - `/jffs` is about 45 MiB. Do not leave `bak-*`, AppleDouble `._*` files, or extra config copies on the router.
 
-Operator detail is `merlin/README_merlin.md`. The schema note is `docs/merlin-config.md`. `sh merlin/build.sh` writes `merlin/dist/honk-be88u.tar.gz`.
+Operator detail is `merlin/README_merlin.md`. The schema note is `docs/merlin-config.md`. `sh merlin/build.sh` writes `merlin/dist/honk-be88u.tar.gz` (`native-api`, no `clash-api`/`rprx`/`ebpf`; pinned doona; geo `cn`/`private`).
 
 The sections below are the honk engine that `honk-core` implements on a normal Linux host. That engine is experimental alpha. License: **GPL-3.0-only**. Upstream: <https://github.com/daeuniverse/honk>. Docs for the engine remain `doc/en/` and `doc/zh/`.
 

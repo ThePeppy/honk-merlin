@@ -777,8 +777,9 @@ sh -c 'sleep 40' honk-dataplane >/dev/null 2>&1 &
 decoy=$!
 sh -c 'sleep 40' 'sh /jffs/addons/honk/scripts/install.sh' >/dev/null 2>&1 &
 sshish=$!
-cp /bin/sleep "$work/exact-bin"
-"$work/exact-bin" 40 >/dev/null 2>&1 &
+# macOS kills unsigned copies of system binaries (SIGKILL). Keep an
+# unrelated sleep in-place so this check is the same on Darwin and Linux.
+sh -c 'sleep 40' exact-unrelated >/dev/null 2>&1 &
 exact=$!
 honk_disarm manual
 if kill -0 "$decoy" >/dev/null 2>&1; then

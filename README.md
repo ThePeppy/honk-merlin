@@ -63,7 +63,7 @@ Every `merlin-v*` tag rebuilds and republishes that rolling URL together with a 
 
 Operator steps are in [merlin/README_merlin.md](merlin/README_merlin.md). The short addon note is [merlin/README.md](merlin/README.md). The config schema is [docs/merlin-config.md](docs/merlin-config.md).
 
-`sh merlin/build.sh` writes `merlin/dist/honk-be88u.tar.gz`: a static `aarch64-unknown-linux-musl` `honk-core` without eBPF, the UI, `geoip.dat`, `geosite.dat`, the scripts, and this page.
+`sh merlin/build.sh` writes `merlin/dist/honk-be88u.tar.gz`: a static `aarch64-unknown-linux-musl` `honk-core` without eBPF, Clash, or VLESS/VMess, pinned doona, `geoip.dat`/`geosite.dat` reduced to `cn` and `private`, the scripts, and this page.
 
 ## License
 

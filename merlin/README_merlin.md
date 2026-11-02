@@ -76,9 +76,9 @@ python3 merlin/tools/surge2honk.py profile.conf -o config.dae \
   --subscription-file='https://机场地址/list=./list.txt'
 ```
 
-`--fetch` 才会去下载 `policy-path`。摘要打在标准错误，例如 `nodes=3 groups=2 rules=6 ...`。把 `config.dae` 放到路由器的 `/jffs/addons/honk/config.dae`，并加上 `experimental.clash_api`（见 `docs/merlin-config.md`）。页面只有启动、重启、关闭。订阅和节点在 doona。旧的 `start:honkrefresh` 仍会对正在运行的 `honk-core` 发 SIGHUP。没有 `config.dae` 时不能启动。
+`--fetch` 才会去下载 `policy-path`。摘要打在标准错误，例如 `nodes=3 groups=2 rules=6 ...`。把 `config.dae` 放到路由器的 `/jffs/addons/honk/config.dae`，并加上 `experimental.native_api`（见 `docs/merlin-config.md`）。页面只有启动、重启、关闭。订阅和节点在 doona。旧的 `start:honkrefresh` 仍会对正在运行的 `honk-core` 发 SIGHUP。没有 `config.dae` 时不能启动。
 
-域名解析默认仍是 dnsmasq。`merlin/scripts/dnsmasq.postconf` 是路由器上现有的文件，把上游指到 `127.0.0.1#5354`（不用 5353，那是 avahi 的 mDNS）；`config.dae` 里对应 `dns.bind: '127.0.0.1:5354'`。`honk_install` 不会把 postconf 拷到 `/jffs/scripts`。UDP 不进 REDIRECT。安装包里的 `geoip.dat` 和 `geosite.dat` 给 `dip(geoip:...)` 和 `domain(geosite:...)` 用。
+域名解析默认仍是 dnsmasq。`merlin/scripts/dnsmasq.postconf` 是路由器上现有的文件，把上游指到 `127.0.0.1#5354`（不用 5353，那是 avahi 的 mDNS）；`config.dae` 里对应 `dns.bind: '127.0.0.1:5354'`。`honk_install` 不会把 postconf 拷到 `/jffs/scripts`。UDP 不进 REDIRECT。安装包里的 `geoip.dat` 和 `geosite.dat` 只含 `cn` 和 `private`，给 `dip(geoip:...)` 和 `domain(geosite:...)` 用。
 
 ## 编译
 
@@ -88,7 +88,7 @@ python3 merlin/tools/surge2honk.py profile.conf -o config.dae \
 sh merlin/build.sh
 ```
 
-产物是 `merlin/dist/honk-be88u.tar.gz`。里面是静态 musl 的 `honk-core`、zashboard、`geoip.dat`、`geosite.dat`、脚本和管理页。
+产物是 `merlin/dist/honk-be88u.tar.gz`。里面是静态 musl 的 `honk-core`（native-api，无 clash-api / rprx / eBPF）、pinned doona、只含 `cn` 和 `private` 的 `geoip.dat` / `geosite.dat`、脚本和管理页。
 
 ## 在路由器上怎么试
 
