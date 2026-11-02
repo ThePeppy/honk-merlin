@@ -195,7 +195,7 @@ fi
 if grep -n ' which ' "$scripts"/*.sh; then
     fail "router script uses which"
 fi
-page=$root/merlin/www/Tools_Honk.asp
+page=$root/merlin/www/Honk.asp
 grep -q 'id="honk_note"' "$page" || fail "page has no refusal note"
 grep -q 'window.location.reload' "$page" || fail "page does not reload after apply"
 grep -q 'conntrack 不可用' "$page" || fail "page does not explain need_conntrack"
@@ -296,33 +296,112 @@ if grep -q '^listen' "$binlog"; then
 fi
 [ ! -f "$work/state/honk.armed" ] || fail "boot left an arm token"
 
+# The stock menu shape: menuTree.list holds top-level sections, each with a
+# plain index string and a tab array. Honk must become its own section placed
+# before the Administration section, whose index is the stable anchor.
 cat >"$work/menu.js" <<'EOF'
+define(function(){
 var menuTree = {
+list: [
+{
+menuName: "AiMesh",
+index: "menu_AiMesh",
 tab: [
+{url: "AiMesh.asp", tabName: "AiMesh"},
+{url: "NULL", tabName: "__INHERIT__"}
+]
+},
+{
+menuName: "<#613#>",
+index: "menu_Setting",
+tab: [
+{url: "Advanced_OperationMode_Content.asp", tabName: "<#612#>"},
 {url: "Advanced_System_Content.asp", tabName: "<#613#>"},
 {url: "Advanced_FirmwareUpgrade_Content.asp", tabName: "<#614#>"},
+{url: "NULL", tabName: "__INHERIT__"}
+]
+}
 ]
 };
 retArray.push("Advanced_System_Content.asp");
 return menuTree;
+});
 EOF
 honk_menu_insert "$work/menu.js" user3.asp || fail "menu insert"
 honk_menu_insert "$work/menu.js" user3.asp || fail "menu insert twice"
 [ "$(grep -c 'tabName: "Honk"' "$work/menu.js")" = 1 ] || fail "duplicate Honk tab"
+[ "$(grep -c 'index: "menu_Honk"' "$work/menu.js")" = 1 ] || fail "Honk section count drifted"
 grep -q 'return menuTree' "$work/menu.js" || fail "menu wrapper lost"
 grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu.js" || fail "exclude list was treated as the anchor"
+ln=$(grep -n 'index: "menu_Honk"' "$work/menu.js" | cut -d: -f1)
+sl=$(grep -n 'index: "menu_Setting"' "$work/menu.js" | cut -d: -f1)
+[ "$ln" -lt "$sl" ] || fail "Honk section was not placed before the System section"
+grep -q '{url: "user3.asp", tabName: "Honk"}' "$work/menu.js" || fail "Honk tab lost the page slot"
+honk_menu_remove "$work/menu.js" || fail "menu remove failed"
+[ "$(grep -c 'index: "menu_Honk"' "$work/menu.js")" = 0 ] || fail "Honk section survived removal"
+[ "$(grep -c 'index: "menu_Setting"' "$work/menu.js")" = 1 ] || fail "System section was damaged by removal"
+grep -q 'return menuTree' "$work/menu.js" || fail "menu wrapper lost on removal"
 cat >"$work/menu-ws.js" <<'EOF'
 var menuTree = {
-tab: [
-{ url : "Advanced_System_Content.asp" , tabName: "<#menu5_6_2#>" },
+list: [
+{
+   menuName   :   "<#613#>" ,
+   index   :   "menu_Setting" ,
+   tab: [ { url : "Advanced_System_Content.asp" , tabName: "<#menu5_6_2#>" } ]
+}
 ]
 };
 return menuTree;
 EOF
 honk_menu_insert "$work/menu-ws.js" user5.asp || fail "whitespace anchor was rejected"
+honk_menu_insert "$work/menu-ws.js" user5.asp || fail "whitespace re-insert was rejected"
 [ "$(grep -c 'tabName: "Honk"' "$work/menu-ws.js")" = 1 ] || fail "whitespace anchor inserted the wrong number of tabs"
-cp "$work/menu.js" "$work/menu-dup.js"
-printf '%s\n' '{url: "Advanced_System_Content.asp", tabName: "<#613#>"},' >>"$work/menu-dup.js"
+# An install from the older layout must clean its one-line tab while keeping
+# the stock System section intact.
+cat >"$work/menu-legacy.js" <<'EOF'
+var menuTree = {
+list: [
+{
+menuName: "<#613#>",
+index: "menu_Setting",
+tab: [
+{url: "Advanced_System_Content.asp", tabName: "<#613#>"},
+{url: "user1.asp", tabName: "Honk"},
+{url: "NULL", tabName: "__INHERIT__"}
+]
+}
+]
+};
+return menuTree;
+EOF
+honk_menu_insert "$work/menu-legacy.js" user3.asp || fail "legacy layout insert failed"
+[ "$(grep -c 'tabName: "Honk"' "$work/menu-legacy.js")" = 1 ] || fail "legacy tab survived alongside the new section"
+[ "$(grep -c 'url: "user1.asp"' "$work/menu-legacy.js")" = 0 ] || fail "legacy tab line survived"
+[ "$(grep -c 'index: "menu_Setting"' "$work/menu-legacy.js")" = 1 ] || fail "legacy insert damaged the System section"
+honk_menu_remove "$work/menu-legacy.js" || fail "legacy layout remove failed"
+[ "$(grep -c 'tabName: "Honk"' "$work/menu-legacy.js")" = 0 ] || fail "legacy remove left the new section"
+mkdir -p "$work/www"
+cat >"$work/menu-dup.js" <<'EOF'
+var menuTree = {
+list: [
+{
+menuName: "a",
+index: "menu_Setting",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
+]
+},
+{
+menuName: "b",
+index: "menu_Setting",
+tab: [
+{url: "NULL", tabName: "__HIDE__"}
+]
+}
+]
+};
+return menuTree;
+EOF
 before=$(md5sum <"$work/menu-dup.js")
 if honk_menu_insert "$work/menu-dup.js" user4.asp 2>"$work/menu-dup.err"; then
     fail "duplicate anchor was accepted"
@@ -330,7 +409,7 @@ fi
 after=$(md5sum <"$work/menu-dup.js")
 [ "$before" = "$after" ] || fail "duplicate anchor modified the menu"
 grep -q menu_anchor_not_found "$work/menu-dup.err" || fail "duplicate anchor was silent"
-printf '%s\nreturn menuTree;\n' 'var menuTree = { tab: [] };' >"$work/menu-missing.js"
+printf '%s\nreturn menuTree;\n' 'var menuTree = { list: [] };' >"$work/menu-missing.js"
 before=$(md5sum <"$work/menu-missing.js")
 if honk_menu_insert "$work/menu-missing.js" user6.asp 2>"$work/menu-missing.err"; then
     fail "missing anchor was accepted"
@@ -338,6 +417,28 @@ fi
 after=$(md5sum <"$work/menu-missing.js")
 [ "$before" = "$after" ] || fail "missing anchor modified the menu"
 grep -q menu_anchor_not_found "$work/menu-missing.err" || fail "missing anchor was silent"
+
+# The sidebar icon is a best-effort append to the site-wide style sheet.
+printf '%s\n' 'body { background: #000; }' >"$work/www/index_style.css"
+HONK_STYLE_SRC="$work/www/index_style.css" \
+HONK_STYLE_TMP="$work/style-tmp.css" \
+honk_mount_style || fail "style mount failed with a present source"
+grep -q 'honk-icon-begin' "$work/style-tmp.css" || fail "icon rule not appended"
+grep -q 'menu_Honk' "$work/style-tmp.css" || fail "icon rule lost the index class"
+grep -q 'body { background: #000; }' "$work/style-tmp.css" || fail "icon mount lost the stock rules"
+HONK_STYLE_SRC="$work/www/index_style.css" \
+HONK_STYLE_TMP="$work/style-tmp.css" \
+honk_mount_style || fail "style mount is not idempotent"
+[ "$(grep -c 'honk-icon-begin' "$work/style-tmp.css")" = 1 ] || fail "icon rule duplicated"
+rm -f "$work/style-tmp.css"
+if HONK_STYLE_SRC="$work/www/missing.css" \
+   HONK_STYLE_TMP="$work/style-tmp.css" \
+   honk_mount_style 2>"$work/style-missing.err"; then
+    :
+else
+    fail "missing style source failed the mount"
+fi
+grep -q icon_style_missing "$work/style-missing.err" || fail "missing style source was silent"
 
 printf '%s\n' 'honk_runtime armed' 'other_addon 1' >"$HONK_SETTINGS"
 honk_settings_strip
@@ -401,7 +502,7 @@ am_settings_set() { :; }
 am_settings_get() { :; }
 am_get_webui_page() { am_webui_page=user1.asp; }
 EOF
-printf '%s\n' 'var menuTree = { tab: [] };' 'return menuTree;' >"$work/menu-install-miss.js"
+printf '%s\n' 'var menuTree = { list: [] };' 'return menuTree;' >"$work/menu-install-miss.js"
 mkdir -p "$work/www"
 if HONK_SKIP_WEBUI=0 HONK_SKIP_MOUNT=1 \
     HONK_HELPER="$work/helper.sh" \
@@ -418,8 +519,15 @@ if grep -q 'honk: installed' "$work/install-miss.err"; then
 fi
 cat >"$work/menu-install.js" <<'EOF'
 var menuTree = {
+list: [
+{
+menuName: "<#613#>",
+index: "menu_Setting",
 tab: [
 {url: "Advanced_System_Content.asp", tabName: "<#613#>"},
+{url: "NULL", tabName: "__INHERIT__"}
+]
+}
 ]
 };
 retArray.push("Advanced_System_Content.asp");
@@ -430,14 +538,20 @@ HONK_SKIP_WEBUI=0 HONK_SKIP_MOUNT=1 \
     HONK_WWW="$work/www" \
     HONK_MENU_SRC="$work/menu-install.js" \
     HONK_MENU_TMP="$work/menu-install-tmp.js" \
+    HONK_STYLE_SRC="$work/www/index_style.css" \
+    HONK_STYLE_TMP="$work/install-style-tmp.css" \
     honk_install >"$work/install-ok.out" 2>"$work/install-ok.err"
 grep -q 'honk: installed' "$work/install-ok.err" || fail "numeric menu token did not install"
 if grep -q menu_anchor_not_found "$work/install-ok.err"; then
     fail "numeric menu token was reported missing"
 fi
 [ "$(grep -c 'tabName: "Honk"' "$work/menu-install-tmp.js")" = 1 ] || fail "install did not leave one Honk tab"
-grep -A1 'tabName: "<#613#>"' "$work/menu-install-tmp.js" | grep -q 'tabName: "Honk"' || fail "Honk tab was not inserted after the System page"
+grep -q '{url: "user1.asp", tabName: "Honk"}' "$work/menu-install-tmp.js" || fail "Honk section lost the allocated slot"
+ln=$(grep -n 'index: "menu_Honk"' "$work/menu-install-tmp.js" | cut -d: -f1)
+sl=$(grep -n 'index: "menu_Setting"' "$work/menu-install-tmp.js" | cut -d: -f1)
+[ "$ln" -lt "$sl" ] || fail "install placed Honk outside the top-level list"
 grep -q 'retArray.push("Advanced_System_Content.asp")' "$work/menu-install-tmp.js" || fail "install treated the exclude list as the anchor"
+grep -q 'menu_Honk' "$work/install-style-tmp.css" || fail "install did not mount the icon rule"
 
 # A present config is passed to honk-core. The shell does not fetch the
 # subscription and does not send a Surge user agent.

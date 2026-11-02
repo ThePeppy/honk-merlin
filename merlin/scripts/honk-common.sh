@@ -19,6 +19,8 @@ HONK_SCRIPTS_DIR=${HONK_SCRIPTS_DIR:-/jffs/scripts}
 HONK_WWW=${HONK_WWW:-/www}
 HONK_MENU_SRC=${HONK_MENU_SRC:-/www/require/modules/menuTree.js}
 HONK_MENU_TMP=${HONK_MENU_TMP:-/tmp/menuTree.js}
+HONK_STYLE_SRC=${HONK_STYLE_SRC:-/www/index_style.css}
+HONK_STYLE_TMP=${HONK_STYLE_TMP:-/tmp/index_style.css}
 HONK_DEFAULT_TPROXY_PORT=12345
 HONK_CHAIN=HONK_PRE
 # Private destinations stay on the router. Sending them through REDIRECT made
@@ -716,53 +718,81 @@ honk_boot() {
     honk_mount_page || honk_log webui_failed
 }
 
+# The Honk section is inserted into menuTree.list as a top-level sidebar
+# entry. Its body mirrors the stock multi-line section shape so bracket
+# matching stays exact: a section runs from its standalone "{" opener line to
+# the first "}," closer line, and no line between them carries trailing
+# content.
+honk_menu_section_body() {
+    local page="$1"
+    cat <<EOF
+			{
+				menuName: "Honk",
+				index: "menu_Honk",
+				tab: [
+					{url: "$page", tabName: "Honk"},
+					{url: "NULL", tabName: "__INHERIT__"}
+				]
+			},
+EOF
+}
+
+# Find the standalone "{" line that opens the stock section holding the given
+# index. Merlin 3006.102 builds use numeric dictionary tokens such as <#613#>
+# for display names, but index strings are plain and stable, and whitespace
+# around the colon is not. Anything but exactly one anchor leaves the file
+# untouched.
+honk_menu_section_start() {
+    local file="$1"
+    local index="$2"
+    local anchor opener
+    if ! anchor=$(awk -v idx="$index" '
+        { s = $0; gsub(/[[:space:]]/, "", s) }
+        index(s, "index:\"" idx "\"") > 0 { n++; line = NR }
+        END { if (n == 1) print line; else exit 2 }
+    ' "$file"); then
+        honk_log menu_anchor_not_found
+        return 1
+    fi
+    if ! opener=$(awk -v after="$anchor" '
+        NR < after { s = $0; gsub(/[[:space:]]/, "", s); if (s == "{") b = NR }
+        END { if (b) print b; else exit 2 }
+    ' "$file"); then
+        honk_log menu_anchor_not_found
+        return 1
+    fi
+    printf '%s\n' "$opener"
+}
+
 honk_menu_insert() {
     local file="$1"
     local page="$2"
-    local tmp count
+    local start tmp count before after
     case $page in
         user[0-9].asp|user[0-9][0-9].asp) ;;
         *) return 1 ;;
     esac
+    [ -f "$file" ] || return 1
+    honk_menu_remove_section "$file" || return 1
+    # Upgrades from the tab-inside-administration layout leave a one-line
+    # entry behind; drop it so the install guard counts exactly one match.
     tmp=$file.honk-tmp
-    # Match the System page by its URL. Merlin 3006.102 builds use a numeric
-    # dictionary token such as <#613#> instead of <#menu5_6_2#>, and the
-    # spaces around the colon are not stable. Any other occurrence count
-    # leaves the menu file untouched.
-    if ! awk -v honk="{url: \"$page\", tabName: \"Honk\"}," '
-        function is_anchor(s, t) {
-            t = s
-            gsub(/[[:space:]]/, "", t)
-            return index(t, "url:\"Advanced_System_Content.asp\"") > 0
-        }
-        BEGIN { n = 0 }
-        {
-            if (is_anchor($0)) {
-                n++
-                print
-                if (n == 1) {
-                    print honk
-                }
-                next
-            }
-            if (index($0, "tabName: \"Honk\"") > 0) {
-                next
-            }
-            print
-        }
-        END { if (n != 1) exit 2 }
-    ' "$file" >"$tmp"; then
-        rm -f "$tmp"
-        honk_log menu_anchor_not_found
-        return 1
-    fi
-    if ! grep -q 'return menuTree' "$tmp"; then
-        rm -f "$tmp"
-        honk_log menu_anchor_not_found
-        return 1
-    fi
-    count=$(grep -c 'tabName: "Honk"' "$tmp" || true)
-    if [ "$count" != "1" ]; then
+    awk 'index($0, "tabName: \"Honk\"") == 0 { print }' "$file" >"$tmp"
+    mv "$tmp" "$file"
+    grep -q 'return menuTree' "$file" || { honk_log menu_anchor_not_found; return 1; }
+    start=$(honk_menu_section_start "$file" menu_Setting) || return 1
+    before=$(grep -c 'index: "menu_Setting"' "$file" || true)
+    honk_menu_section_body "$page" >"$file.section"
+    tmp=$file.honk-tmp
+    awk -v at="$start" '
+        NR == FNR { body = body $0 "\n"; next }
+        FNR == at { printf "%s", body }
+        { print }
+    ' "$file.section" "$file" >"$tmp" || { rm -f "$tmp" "$file.section"; return 1; }
+    rm -f "$file.section"
+    after=$(grep -c 'index: "menu_Setting"' "$tmp" || true)
+    count=$(grep -c 'index: "menu_Honk"' "$tmp" || true)
+    if [ "$count" != "1" ] || [ "$before" != "$after" ] || ! grep -q 'return menuTree' "$tmp"; then
         rm -f "$tmp"
         honk_log menu_anchor_not_found
         return 1
@@ -770,10 +800,54 @@ honk_menu_insert() {
     mv "$tmp" "$file"
 }
 
+# Delete the Honk section: from its standalone "{" opener to the first "},"
+# closer at or after the index line.
+honk_menu_remove_section() {
+    local file="$1"
+    local line opener closer tmp rc
+    [ -f "$file" ] || return 0
+    rc=0
+    line=$(awk '
+        { s = $0; gsub(/[[:space:]]/, "", s) }
+        index(s, "index:\"menu_Honk\"") > 0 { n++; line = NR }
+        END { if (n == 1) print line; else if (n == 0) exit 3; else exit 2 }
+    ' "$file") || rc=$?
+    if [ "$rc" = "3" ]; then
+        return 0
+    fi
+    if [ "$rc" != "0" ]; then
+        honk_log menu_anchor_not_found
+        return 1
+    fi
+    if ! opener=$(awk -v after="$line" '
+        NR < after { s = $0; gsub(/[[:space:]]/, "", s); if (s == "{") b = NR }
+        END { if (b) print b; else exit 2 }
+    ' "$file"); then
+        honk_log menu_anchor_not_found
+        return 1
+    fi
+    if ! closer=$(awk -v before="$line" '
+        NR > before && !found {
+            s = $0
+            gsub(/[[:space:]]/, "", s)
+            if (s == "},") { print NR; found = 1 }
+        }
+        END { if (!found) exit 2 }
+    ' "$file"); then
+        honk_log menu_anchor_not_found
+        return 1
+    fi
+    tmp=$file.honk-tmp
+    awk -v from="$opener" -v to="$closer" 'NR < from || NR > to { print }' "$file" >"$tmp"
+    grep -q 'return menuTree' "$tmp" || { rm -f "$tmp"; honk_log menu_anchor_not_found; return 1; }
+    mv "$tmp" "$file"
+}
+
 honk_menu_remove() {
     local file="$1"
     local tmp
     [ -f "$file" ] || return 0
+    honk_menu_remove_section "$file" || return 1
     tmp=$file.honk-tmp
     awk 'index($0, "tabName: \"Honk\"") == 0 { print }' "$file" >"$tmp"
     mv "$tmp" "$file"
@@ -819,9 +893,67 @@ honk_remove_block() {
     mv "$tmp" "$file"
 }
 
+# The sidebar icon comes from one appended rule in the site-wide style sheet.
+# The stock file is never edited in place: the augmented copy is written to a
+# scratch file and only mounted when it is strictly larger than the source,
+# so a truncated copy can never strip the router UI of its styles. Losing
+# only the icon is acceptable; mounting a broken copy is not.
+honk_style_rule() {
+    cat <<'EOF'
+/* honk-icon-begin */
+.menu_Honk{
+	background: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2036%2036'%3E%3Cpath%20d='M20%203L8%2021L15%2021L13%2033L28%2014L20%2014Z'%20fill='%239fc3e8'/%3E%3C/svg%3E");
+	background-size: 100%;
+	background-repeat: no-repeat;
+}
+/* honk-icon-end */
+EOF
+}
+
+honk_style_strip() {
+    local file="$1"
+    local tmp
+    [ -f "$file" ] || return 0
+    tmp=$file.honk-tmp
+    awk '
+        BEGIN { skip = 0 }
+        /\/\* honk-icon-begin \*\// { skip = 1; next }
+        /\/\* honk-icon-end \*\// { skip = 0; next }
+        skip == 0 { print }
+    ' "$file" >"$tmp"
+    mv "$tmp" "$file"
+}
+
+honk_mount_style() {
+    local bytes_src bytes_new
+    [ -f "$HONK_STYLE_SRC" ] || { honk_log icon_style_missing; return 0; }
+    honk_style_strip "$HONK_STYLE_TMP"
+    cp "$HONK_STYLE_SRC" "$HONK_STYLE_TMP.new" || { honk_log icon_style_missing; return 0; }
+    honk_style_strip "$HONK_STYLE_TMP.new"
+    honk_style_rule >>"$HONK_STYLE_TMP.new"
+    bytes_src=$(wc -c <"$HONK_STYLE_SRC")
+    bytes_new=$(wc -c <"$HONK_STYLE_TMP.new")
+    if [ "$bytes_new" -le "$bytes_src" ]; then
+        rm -f "$HONK_STYLE_TMP.new"
+        honk_log icon_style_missing
+        return 0
+    fi
+    mv "$HONK_STYLE_TMP.new" "$HONK_STYLE_TMP"
+    if [ "$HONK_SKIP_MOUNT" = "1" ]; then
+        return 0
+    fi
+    if grep -q "$HONK_STYLE_SRC" /proc/mounts 2>/dev/null; then
+        umount "$HONK_STYLE_SRC" 2>/dev/null || true
+    fi
+    if ! mount -o bind "$HONK_STYLE_TMP" "$HONK_STYLE_SRC" 2>/dev/null; then
+        honk_log icon_style_missing
+    fi
+    return 0
+}
+
 honk_mount_page() {
     local src page dest marker reuse f sum_src sum_page
-    src=$HONK_PREFIX/www/Tools_Honk.asp
+    src=$HONK_PREFIX/www/Honk.asp
     marker='honk-addon-page'
     [ -f "$src" ] || return 1
     [ -f "$HONK_HELPER" ] || return 1
@@ -862,6 +994,7 @@ honk_mount_page() {
     fi
     honk_menu_insert "$HONK_MENU_TMP" "$page" || return 1
     printf '%s\n' "$page" >"$HONK_PREFIX/page.name"
+    honk_mount_style
     if [ "$HONK_SKIP_MOUNT" = "1" ]; then
         return 0
     fi
@@ -947,7 +1080,9 @@ honk_uninstall() {
     honk_remove_block "$HONK_SCRIPTS_DIR/nat-start"
     honk_remove_block "$HONK_SCRIPTS_DIR/firewall-start"
     if [ -f "$HONK_MENU_TMP" ]; then
-        honk_menu_remove "$HONK_MENU_TMP"
+        # Best-effort like every other uninstall step: a corrupt menu file
+        # must not leave the addon half-removed.
+        honk_menu_remove "$HONK_MENU_TMP" || true
         other=$(grep -E 'url: "user[0-9]+\.asp"' "$HONK_MENU_TMP" || true)
         if [ -z "$other" ] && [ "$HONK_SKIP_MOUNT" != "1" ]; then
             if grep -q "$HONK_MENU_SRC" /proc/mounts 2>/dev/null; then
@@ -955,6 +1090,12 @@ honk_uninstall() {
             fi
             rm -f "$HONK_MENU_TMP"
         fi
+    fi
+    if [ "$HONK_SKIP_MOUNT" != "1" ]; then
+        if grep -q "$HONK_STYLE_SRC" /proc/mounts 2>/dev/null; then
+            umount "$HONK_STYLE_SRC" || true
+        fi
+        rm -f "$HONK_STYLE_TMP" "$HONK_STYLE_TMP.new"
     fi
     if [ -d "$HONK_WWW/user" ]; then
         for f in "$HONK_WWW"/user/user*.asp; do
