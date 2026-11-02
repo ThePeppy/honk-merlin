@@ -97,8 +97,10 @@ sh merlin/build.sh
 1. 先留下一个已经登录的 SSH。不要只靠网页管理。
 2. 核对 `nvram get productid`、`nvram get sw_mode` 和 `uname -m`。型号应是 `RT-BE88U`，模式应是 `1`，架构应是 `aarch64`。
 3. 执行 `conntrack -C`。如果失败，先安装 conntrack 用户态工具再继续。没有它时 Enable 会拒绝，并且不会往 PREROUTING 加规则。
-4. 把压缩包解到 `/jffs/addons/honk`，执行 `sh /jffs/addons/honk/scripts/install.sh`。装完只应多一个管理页，局域网访问应当和安装前一样。
-5. 用另一台电脑打开 Administration - Honk。运行应是「已关闭」。
+4. 执行一条安装命令（重复执行即升级）：
+   `cd /tmp && rm -rf honk honk.tgz && curl -fsSL -o honk.tgz https://github.com/ThePeppy/honk-merlin/releases/download/merlin/honk-be88u.tar.gz && tar zxf honk.tgz && sh honk/scripts/install.sh; rc=$?; rm -rf /tmp/honk /tmp/honk.tgz; (exit $rc)`
+   备用路径：把压缩包传上路由器，解包后执行 `sh honk/scripts/install.sh`。装完左侧栏多一个独立的一级菜单，局域网访问应当和安装前一样。
+5. 用另一台电脑打开路由器页面，左侧栏应有独立的一级菜单 Honk（看不到就 Ctrl+F5 强刷一次，浏览器把菜单树缓存在会话里）。点开它，运行应是「已关闭」。
 6. 点启动。再用那台局域网电脑打开一个直连站点和一个代理站点。直连应很快打开；代理走配置里的节点。面板是 `http://192.168.2.1:9090/ui/`。
 7. 不正常就点关闭。看门狗在进程退出或网关 ping 连续失败时会摘链、恢复 flow cache、删除转到监听端口的 conntrack，然后停进程。
 8. 也可以立刻执行 `sh /jffs/addons/honk/scripts/uninstall.sh`。重启之后拦截应再次关闭。
@@ -108,5 +110,5 @@ sh merlin/build.sh
 - 固件是否自带 `conntrack` 命令。内核有 `CONFIG_NF_CT_NETLINK`，用户态工具不一定在。
 - 更新的 SDK 可能把 BE88U 切到 5.15。探测能看出来，插件仍然不会加载 eBPF。
 - 启用时执行 `fc disable` 和 `fc flush`（有 `runner` 就 disable），并记下之前是开还是关。停用时只在原先为开的情况下 `fc enable` 并 flush。不改 nvram。
-- 菜单锚点写死在当前 Merlin `main` 的管理页。锚点不是恰好一行时，安装不会改 `menuTree.js`。
+- 一级菜单锚点写死在 `index: "menu_Setting"`（系统管理 section；index 是纯字符串，3006.102 的数字词典 token 只影响显示名）。锚点不是恰好一次时，安装不会改 `menuTree.js`。
 - UDP 不进 honk。`firewall-start` 拒绝局域网发往 UDP/443 的包，让浏览器改走 TCP。其它 UDP 仍走原来的路径。

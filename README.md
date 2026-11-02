@@ -12,7 +12,7 @@ The router page only starts, restarts, and stops honk. Subscriptions, nodes, gro
 
 ![Honk page on the RT-BE88U: running, with Start, Restart, and Stop](merlin/router-admin.png)
 
-Captured on an RT-BE88U in wireless-router mode, firmware 3006.102.9. The tab is Administration → Honk.
+Captured on an RT-BE88U in wireless-router mode, firmware 3006.102.9. The capture shows the older layout, where Honk was a tab inside Administration; the addon now adds a top-level `Honk` entry to the sidebar with its own icon.
 
 ## What is running
 
@@ -48,6 +48,16 @@ Boot does not arm the intercept. Stop removes it and restores Broadcom flow cach
 | Buttons | 启动, 重启, 关闭 |
 | Panel | doona on port 9090 |
 | Config | `/jffs/addons/honk/config.dae`, which includes `nodes.dae` |
+
+## Install
+
+Paste one command into an SSH session on the router (Astrill-style; re-running it upgrades in place):
+
+```sh
+cd /tmp && rm -rf honk honk.tgz && curl -fsSL -o honk.tgz https://github.com/ThePeppy/honk-merlin/releases/download/merlin/honk-be88u.tar.gz && tar zxf honk.tgz && sh honk/scripts/install.sh; rc=$?; rm -rf /tmp/honk /tmp/honk.tgz; (exit $rc)
+```
+
+Every `merlin-v*` tag rebuilds and republishes that rolling URL together with a `SHA256SUMS` file for verification. After an install or upgrade, hard-reload the router page once (Ctrl+F5), because the browser caches the menu tree in its session. Uninstall with `sh /jffs/addons/honk/scripts/uninstall.sh`.
 
 ## Docs
 

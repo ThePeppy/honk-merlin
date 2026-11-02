@@ -27,4 +27,16 @@ experimental {
 
 The panel is `http://192.168.2.1:9090/ui/`.
 
+## Web UI and install
+
+The addon adds a top-level `Honk` entry to the router sidebar (own icon, one page, no tab strip) instead of a tab inside Administration. It copies `/www/require/modules/menuTree.js` to `/tmp`, inserts one section before the stable `index: "menu_Setting"` anchor, and bind-mounts the copy; one icon rule is appended to a bind-mounted copy of `/www/index_style.css` the same way. Any anchor mismatch leaves the stock files untouched and fails the install with `menu_anchor_not_found`.
+
+Install from SSH with one command; re-running it upgrades in place:
+
+```sh
+cd /tmp && rm -rf honk honk.tgz && curl -fsSL -o honk.tgz https://github.com/ThePeppy/honk-merlin/releases/download/merlin/honk-be88u.tar.gz && tar zxf honk.tgz && sh honk/scripts/install.sh; rc=$?; rm -rf /tmp/honk /tmp/honk.tgz; (exit $rc)
+```
+
+Pushing a `merlin-v*` tag rebuilds and republishes that URL with `SHA256SUMS`. `sh /jffs/addons/honk/scripts/uninstall.sh` removes everything, including both mounts.
+
 Not in this phase: redirecting UDP into honk, TUN, TPROXY, launching eBPF, IPv6, and guest bridges. `firewall-start` rejects LAN UDP/443 so QUIC falls back to the TCP redirect; other UDP is unchanged. Flow cache is suspended only while armed; nvram is not edited. This repository has no LuCI tree. `merlin/scripts/dnsmasq.postconf` is the router's current file and `honk_install` does not copy it to `/jffs/scripts`.
