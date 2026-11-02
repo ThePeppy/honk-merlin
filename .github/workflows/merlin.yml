@@ -5,6 +5,7 @@ on:
     branches: [merlin]
   push:
     branches: [merlin]
+    tags: ["merlin-v*"]
   workflow_dispatch:
 
 permissions:
@@ -22,6 +23,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          # git describe stamps honk/version from the merlin-v* tag; a shallow
+          # checkout has no tags and the installer would print a bare SHA.
+          fetch-depth: 0
       - name: Read Rust toolchain
         id: toolchain
         run: echo "stable=$(grep -oP '^channel\s*=\s*\"\K[^\"]+' rust-toolchain.toml)" >> "$GITHUB_OUTPUT"
@@ -69,3 +73,50 @@ jobs:
         run: |
           bash merlin/tests/safety.sh
           python3 merlin/tools/test_surge2honk.py
+
+  # One rolling release owns the stable download URL. It must stay a
+  # prerelease and never "latest", or every addon tag would steal
+  # releases/latest from the engine's v* releases.
+  release:
+    name: GitHub Release (addon)
+    needs: [build-be88u, test]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    if: startsWith(github.ref, 'refs/tags/merlin-v')
+    steps:
+      - name: Download the addon tarball
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: honk-be88u
+          path: dist
+      - name: Write SHA256SUMS
+        working-directory: dist
+        run: sha256sum -- *.tar.gz > SHA256SUMS
+      - name: Write release notes
+        env:
+          BASE_URL: ${{ github.server_url }}/${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          printf 'Rolling honk addon build for Asuswrt-Merlin on RT-BE88U. Each merlin-v* tag overwrites these assets and moves the merlin tag.\n\nSource tag: `%s`\n\nCommit: `%s`\n\nBuild: %s\n\nInstall over SSH:\n\n```sh\ncd /tmp && rm -rf honk honk.tgz && curl -fsSL -o honk.tgz %s/releases/download/merlin/honk-be88u.tar.gz && tar zxf honk.tgz && sh honk/scripts/install.sh; rc=$?; rm -rf /tmp/honk /tmp/honk.tgz; (exit $rc)\n```\n' \
+            "$GITHUB_REF_NAME" "$GITHUB_SHA" "$RUN_URL" "$BASE_URL" > notes.md
+      - name: Publish the rolling merlin release
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
+        with:
+          tag_name: merlin
+          name: honk addon for RT-BE88U
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          make_latest: "false"
+          files: |
+            dist/honk-be88u.tar.gz
+            dist/SHA256SUMS
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          body_path: notes.md
+      # Default checkout keeps GITHUB_TOKEN credentials; the workflow-level
+      # permission grant above authorizes this force push.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Move the rolling merlin tag
+        run: git push --force origin "$GITHUB_SHA:refs/tags/merlin"
