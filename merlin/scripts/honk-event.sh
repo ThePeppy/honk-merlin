@@ -5,6 +5,9 @@ HONK_SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$HONK_SCRIPT_DIR/honk-common.sh"
 
+honk_lock || exit 0
+trap 'honk_unlock' EXIT INT TERM HUP
+
 case "${1:-}:${2:-}" in
     start:honk)
         honk_arm || true

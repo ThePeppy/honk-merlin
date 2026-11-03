@@ -37,7 +37,7 @@ flowchart TD
   hd -.->|域名交给上面核对| honk
 ```
 
-`HONK_PRE` 在 REDIRECT 之前放行 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16` 和 `100.64.0.0/10`。IPv6 不拦截。dnsmasq 把 DNS 转到 `127.0.0.1#5354`，因为 5353 是 avahi。`honk_install` 不会把 `dnsmasq.postconf` 拷进 `/jffs/scripts`。
+`HONK_PRE` 在 REDIRECT 之前放行 `10.0.0.0/8`、`172.16.0.0/12`、`192.168.0.0/16` 和 `100.64.0.0/10`。IPv6 不拦截。dnsmasq 只在 armed 时把 DNS 转到 `127.0.0.1#5354`，因为 5353 是 avahi；`honk_install` 管理的 `/jffs/scripts/dnsmasq.postconf` hook 会在关闭和开机未启动时恢复固件 upstream。
 
 开机不会自动启动。关闭会摘掉拦截，并恢复 Broadcom flow cache。不改 nvram。
 

@@ -29,9 +29,9 @@ On this machine the datapath is IPv4 TCP REDIRECT:
 
 - `PREROUTING` jumps to `HONK_PRE`. That chain returns traffic to the router itself, the LAN prefix, TCP/53, TCP/9090, and `10/8`, `172.16/12`, `192.168/16`, `100.64/10`. The last rule redirects other `br0` TCP to `<lan-ip>:<tproxy_port>` (12345 when unset). The port name is historical. Do not install TPROXY.
 - iptables does not choose direct versus proxy. `honk-core --redirect` reads `SO_ORIGINAL_DST` and applies `config.dae`.
-- UDP is not redirected. `firewall-start` rejects LAN UDP/443 so QUIC falls back to TCP. Other UDP stays on the kernel path. IPv6 is not intercepted.
+- UDP is not redirected. While armed, `firewall-start` rejects LAN UDP/443 so QUIC falls back to TCP; stop and boot remove that reject. Other UDP stays on the kernel path. IPv6 is not intercepted.
 - Do not load eBPF or add a TUN mode on this router to change policy. The 4.19 kernel here is not that datapath.
-- dnsmasq forwards to `127.0.0.1#5354`. `dns.bind` is `127.0.0.1:5354`. Port 5353 is avahi. `honk_install` does not copy `dnsmasq.postconf` to `/jffs/scripts`.
+- dnsmasq forwards to `127.0.0.1#5354` only while the addon is armed. The installed `/jffs/scripts/dnsmasq.postconf` hook restores the firmware `servers-file` upstream on stop and boot; `honk_install` manages that hook block. `dns.bind` is `127.0.0.1:5354`. Port 5353 is avahi.
 - `/jffs` is about 45 MiB. Do not leave `bak-*`, AppleDouble `._*` files, or extra config copies on the router.
 
 Operator detail is `merlin/README_merlin.md`. The schema note is `docs/merlin-config.md`. `sh merlin/build.sh` writes `merlin/dist/honk-be88u.tar.gz` (`native-api`, no `clash-api`/`rprx`/`ebpf`; pinned doona; geo `cn`/`private`).

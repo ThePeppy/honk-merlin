@@ -37,7 +37,7 @@ flowchart TD
   hd -.->|domain for the check above| honk
 ```
 
-`HONK_PRE` returns `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `100.64.0.0/10` before the REDIRECT. IPv6 is not intercepted. dnsmasq forwards to `127.0.0.1#5354` because 5353 is avahi. `honk_install` does not copy `dnsmasq.postconf` into `/jffs/scripts`.
+`HONK_PRE` returns `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, and `100.64.0.0/10` before the REDIRECT. IPv6 is not intercepted. dnsmasq forwards to `127.0.0.1#5354` only while armed because 5353 is avahi; `honk_install` manages a `/jffs/scripts/dnsmasq.postconf` hook that restores the firmware upstream on stop and boot.
 
 Boot does not arm the intercept. Stop removes it and restores Broadcom flow cache. nvram is not edited.
 

@@ -13,6 +13,8 @@ HONK_CONNTRACK=${HONK_CONNTRACK:-conntrack}
 HONK_PING=${HONK_PING:-ping}
 HONK_IP=${HONK_IP:-ip}
 HONK_NVRAM=${HONK_NVRAM:-nvram}
+HONK_SERVICE=${HONK_SERVICE:-service}
+HONK_DNSMASQ_CONF=${HONK_DNSMASQ_CONF:-/etc/dnsmasq.conf}
 HONK_HELPER=${HONK_HELPER:-/usr/sbin/helper.sh}
 HONK_SETTINGS=${HONK_SETTINGS:-/jffs/addons/custom_settings.txt}
 HONK_SCRIPTS_DIR=${HONK_SCRIPTS_DIR:-/jffs/scripts}
@@ -84,6 +86,10 @@ honk_pin_bins() {
     if [ -n "$bin" ]; then
         HONK_PING=$bin
     fi
+    bin=$(honk_resolve "$HONK_SERVICE" || true)
+    if [ -n "$bin" ]; then
+        HONK_SERVICE=$bin
+    fi
 }
 
 honk_log() {
@@ -97,6 +103,56 @@ honk_log() {
 
 honk_state() {
     printf '%s/%s\n' "$HONK_STATE_DIR" "$1"
+}
+
+honk_dns_forwarded() {
+    [ -f "$HONK_DNSMASQ_CONF" ] || return 1
+    grep -qE '^server=127\.0\.0\.1#535[34]$' "$HONK_DNSMASQ_CONF"
+}
+
+honk_dns_restart() {
+    honk_pin_bins
+    if [ ! -x "$HONK_SERVICE" ]; then
+        honk_log dns_restart_skipped
+        return 0
+    fi
+    "$HONK_SERVICE" restart_dnsmasq >/dev/null 2>&1 || honk_log dns_restart_failed
+}
+
+# One addon action at a time. Service events run in the background, so a stop
+# and a start issued a few seconds apart must not interleave: the stop's
+# conntrack wait can last ~9 s, and its tail would otherwise delete a newer
+# arm's chain, token and firewall rule.
+honk_lock() {
+    local dir pid i=0
+    dir=$(honk_state honk.lock)
+    while ! mkdir "$dir" 2>/dev/null; do
+        pid=$(cat "$dir/pid" 2>/dev/null || true)
+        case $pid in
+            ''|*[!0-9]*) ;;
+            *)
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    rm -rf "$dir"
+                    continue
+                fi
+                ;;
+        esac
+        i=$((i + 1))
+        if [ "$i" -ge 60 ]; then
+            honk_log lock_timeout
+            return 1
+        fi
+        sleep 1
+    done
+    printf '%s\n' "$$" >"$dir/pid"
+    HONK_LOCK_HELD=1
+    return 0
+}
+
+honk_unlock() {
+    [ "${HONK_LOCK_HELD:-0}" = 1 ] || return 0
+    rm -rf "$(honk_state honk.lock)"
+    HONK_LOCK_HELD=0
 }
 
 honk_set_status() {
@@ -200,6 +256,11 @@ honk_stop_listener() {
 honk_disarm() {
     local reason="${1:-disarmed}"
     honk_pin_bins
+    # Fence the nat-start hook before unlinking. A firewall reload during the
+    # conntrack wait could otherwise see the token and restore HONK_PRE after
+    # this function removed it, leaving every LAN TCP flow redirected to a
+    # listener that is gone.
+    rm -f "$(honk_state honk.armed)" "$(honk_state honk.confirmed)"
     honk_unlink
     honk_fc_restore
     honk_stop_listener
@@ -212,6 +273,16 @@ honk_disarm() {
         "$(honk_state honk.facts)" \
         "$(honk_state honk.port)" \
         "$(honk_state honk.pingfails)"
+    # A nat-start that passed the token check before the fence may still be
+    # running; remove whatever it installed.
+    honk_unlink
+    # A stopped addon must not keep blocking QUIC or sending LAN DNS to a
+    # listener that is gone. Restart dnsmasq only when its live config still
+    # points at honk; boot and install then stay quiet.
+    "$HONK_SCRIPT_DIR/honk-firewall.sh" remove >>"$(honk_state honk.log)" 2>&1 || honk_log firewall_failed
+    if honk_dns_forwarded; then
+        honk_dns_restart
+    fi
     honk_set_status off "$reason"
     honk_log "disarmed $reason"
 }
@@ -620,6 +691,10 @@ honk_arm() {
     "$HONK_SCRIPT_DIR/honk-watch.sh" >>"$(honk_state honk.log)" 2>&1 &
     printf '%s\n' "$!" >"$(honk_state honk.watch.pid)"
     : >"$(honk_state honk.armed)"
+    "$HONK_SCRIPT_DIR/honk-firewall.sh" add >>"$(honk_state honk.log)" 2>&1 || honk_log firewall_failed
+    if ! honk_dns_forwarded; then
+        honk_dns_restart
+    fi
     honk_set_status on running
     honk_log "started port $port"
 }
@@ -635,6 +710,19 @@ honk_confirm() {
     honk_log confirm_noop
 }
 
+honk_watch_disarm() {
+    if [ "${HONK_LOCK_HELD:-0}" = 1 ]; then
+        honk_disarm "$1"
+        return 0
+    fi
+    if ! honk_lock; then
+        honk_disarm "$1"
+        return 0
+    fi
+    honk_disarm "$1"
+    honk_unlock
+}
+
 honk_watch_step() {
     local pid gw fails
     honk_pin_bins
@@ -643,11 +731,11 @@ honk_watch_step() {
     fi
     pid=$(cat "$(honk_state honk.pid)" 2>/dev/null || true)
     if [ -z "$pid" ] || ! kill -0 "$pid" >/dev/null 2>&1; then
-        honk_disarm listener_down
+        honk_watch_disarm listener_down
         return 1
     fi
     if ! honk_listening; then
-        honk_disarm listener_down
+        honk_watch_disarm listener_down
         return 1
     fi
     gw=$(cat "$(honk_state honk.gateway)" 2>/dev/null || true)
@@ -662,7 +750,7 @@ honk_watch_step() {
     fails=$((fails + 1))
     printf '%s\n' "$fails" >"$(honk_state honk.pingfails)"
     if [ "$fails" -ge "$HONK_PING_LIMIT" ]; then
-        honk_disarm ping_failed
+        honk_watch_disarm ping_failed
         return 1
     fi
     return 0
@@ -699,8 +787,16 @@ honk_nat_start() {
     if ! honk_watch_step; then
         return 0
     fi
+    if [ ! -f "$(honk_state honk.armed)" ]; then
+        honk_unlink
+        return 0
+    fi
     if ! honk_apply; then
         honk_disarm apply_failed
+        return 0
+    fi
+    if [ ! -f "$(honk_state honk.armed)" ]; then
+        honk_unlink
     fi
 }
 
@@ -1002,12 +1098,31 @@ honk_mount_page() {
     mount -o bind "$HONK_MENU_TMP" "$HONK_MENU_SRC"
 }
 
+honk_replace_legacy_postconf() {
+    local file="$1" head
+    [ -f "$file" ] || return 0
+    head=$(sed -n '1,3p' "$file" 2>/dev/null || true)
+    case $head in
+        *'# honk: send dnsmasq upstream'*|*'# Merlin avahi owns UDP 5353'*)
+            # Previous releases told operators to copy a hand-written file
+            # here. It always forced the honk upstream; move it aside so any
+            # foreign lines remain recoverable, then install the managed hook.
+            if mv -f "$file" "$HONK_PREFIX/dnsmasq.postconf.legacy" 2>/dev/null; then
+                honk_log legacy_postconf_replaced
+            else
+                rm -f "$file"
+            fi
+            ;;
+    esac
+}
+
 honk_install_hooks() {
-    local event boot nat firewall
+    local event boot nat firewall dns
     event="$HONK_SCRIPTS_DIR/service-event"
     boot="$HONK_SCRIPTS_DIR/services-start"
     nat="$HONK_SCRIPTS_DIR/nat-start"
     firewall="$HONK_SCRIPTS_DIR/firewall-start"
+    dns="$HONK_SCRIPTS_DIR/dnsmasq.postconf"
     honk_install_block "$event" "case \"\${1:-}:\${2:-}\" in
   start:honk|stop:honk|restart:honk|start:honkconfirm|start:honkrefresh)
     trap '' HUP
@@ -1017,6 +1132,11 @@ esac"
     honk_install_block "$boot" "$HONK_PREFIX/scripts/honk-boot.sh"
     honk_install_block "$nat" "$HONK_PREFIX/scripts/honk-nat.sh"
     honk_install_block "$firewall" "$HONK_PREFIX/scripts/honk-firewall.sh"
+    # Previous releases shipped a hand-copied dnsmasq.postconf. It always
+    # forced the honk upstream, so it must be replaced by the conditional
+    # hook rather than left in front of it.
+    honk_replace_legacy_postconf "$dns"
+    honk_install_block "$dns" "$HONK_PREFIX/scripts/honk-dns.sh \"\$1\""
 }
 
 honk_install() {
@@ -1079,6 +1199,7 @@ honk_uninstall() {
     honk_remove_block "$HONK_SCRIPTS_DIR/services-start"
     honk_remove_block "$HONK_SCRIPTS_DIR/nat-start"
     honk_remove_block "$HONK_SCRIPTS_DIR/firewall-start"
+    honk_remove_block "$HONK_SCRIPTS_DIR/dnsmasq.postconf"
     if [ -f "$HONK_MENU_TMP" ]; then
         # Best-effort like every other uninstall step: a corrupt menu file
         # must not leave the addon half-removed.

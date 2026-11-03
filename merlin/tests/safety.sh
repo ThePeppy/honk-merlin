@@ -12,6 +12,8 @@ binlog=$work/bin.log
 iptlog=$work/iptables.log
 jump=$work/jump.count
 echo 0 >"$jump"
+forward=$work/forward.count
+echo 0 >"$forward"
 
 mkdir -p "$work/bin" "$work/state" "$work/jffs/scripts" "$work/prefix/scripts" "$work/prefix/www"
 
@@ -47,6 +49,26 @@ cat >"$work/bin/iptables" <<EOF
 printf '%s\n' "\$*" >> "$iptlog"
 jump=$jump
 count=\$(cat "\$jump")
+forward=$forward
+fcount=\$(cat "\$forward")
+if [ "\$1" = -C ] && [ "\$2" = FORWARD ]; then
+    [ "\$fcount" -gt 0 ]
+    exit \$?
+fi
+if [ -f "$work/drop-token" ] && [ "\$1" = -t ] && [ "\$3" = -A ] && [ "\$4" = HONK_PRE ]; then
+    rm -f "\$HONK_STATE_DIR/honk.armed"
+fi
+if [ "\$1" = -I ] && [ "\$2" = FORWARD ]; then
+    echo 1 > "\$forward"
+    exit 0
+fi
+if [ "\$1" = -D ] && [ "\$2" = FORWARD ]; then
+    if [ "\$fcount" -gt 0 ]; then
+        echo 0 > "\$forward"
+        exit 0
+    fi
+    exit 1
+fi
 if [ "\$1" = -t ] && [ "\$3" = -D ] && [ "\$4" = PREROUTING ]; then
     if [ "\$count" -gt 0 ]; then
         echo \$((count - 1)) > "\$jump"
@@ -125,6 +147,19 @@ for arg in "\$@"; do
         while :; do sleep 30; done
     fi
 done
+exit 0
+EOF
+
+export HONK_DNSMASQ_CONF="$work/dnsmasq.conf"
+export HONK_SERVICE_LOG="$work/service.log"
+export HONK_SERVICE="$work/bin/service"
+printf '%s\n' 'no-resolv' 'servers-file=/tmp/resolv.dnsmasq' >"$HONK_DNSMASQ_CONF"
+cat >"$work/bin/service" <<'EOF'
+#!/bin/sh
+printf '%s\n' "$*" >> "$HONK_SERVICE_LOG"
+if [ "${1:-}" = restart_dnsmasq ]; then
+    "$HONK_SCRIPT_DIR/honk-dns.sh" "$HONK_DNSMASQ_CONF"
+fi
 exit 0
 EOF
 
@@ -244,6 +279,118 @@ fi
 [ "$(honk_resolve curl)" = "$work/root/opt/bin/curl" ] || fail "curl was not resolved from the probe list"
 HONK_CONNTRACK=$saved_ct
 HONK_BIN_DIRS=$saved_dirs
+
+# The dnsmasq hook forwards to honk only while armed. A stopped addon keeps
+# the firmware upstream, otherwise every LAN query is sent to a dead port.
+printf '%s\n' 'no-resolv' 'servers-file=/tmp/resolv.dnsmasq' >"$HONK_DNSMASQ_CONF"
+: >"$work/state/honk.armed"
+"$scripts/honk-dns.sh" "$HONK_DNSMASQ_CONF"
+grep -q '^server=127.0.0.1#5354$' "$HONK_DNSMASQ_CONF" || fail "armed dnsmasq did not point at honk"
+if grep -q '^servers-file=' "$HONK_DNSMASQ_CONF"; then
+    fail "armed dnsmasq kept an ISP upstream"
+fi
+"$scripts/honk-dns.sh" "$HONK_DNSMASQ_CONF"
+[ "$(grep -c '^server=127.0.0.1#5354$' "$HONK_DNSMASQ_CONF")" = 1 ] || fail "dnsmasq forward duplicated"
+# dnsmasq restart regenerates the stock file before the postconf runs.
+printf '%s\n' 'no-resolv' 'servers-file=/tmp/resolv.dnsmasq' >"$HONK_DNSMASQ_CONF"
+rm -f "$work/state/honk.armed"
+"$scripts/honk-dns.sh" "$HONK_DNSMASQ_CONF"
+if grep -q '^server=127.0.0.1#5354$' "$HONK_DNSMASQ_CONF"; then
+    fail "disarmed dnsmasq kept the honk upstream"
+fi
+grep -q '^servers-file=/tmp/resolv.dnsmasq$' "$HONK_DNSMASQ_CONF" || fail "disarmed dnsmasq lost the firmware upstream"
+
+# Disarm reloads dnsmasq only when the live config still points at honk, and
+# always removes the arm-time QUIC reject.
+printf '%s\n' 'servers-file=/tmp/resolv.dnsmasq' 'server=127.0.0.1#5354' >"$HONK_DNSMASQ_CONF"
+: >"$HONK_SERVICE_LOG"
+: >"$iptlog"
+honk_disarm dns_restore
+grep -q 'restart_dnsmasq' "$HONK_SERVICE_LOG" || fail "disarm did not reload dnsmasq"
+grep -q '^servers-file=/tmp/resolv.dnsmasq$' "$HONK_DNSMASQ_CONF" || fail "disarm left the dead honk upstream"
+grep -q -- '-D FORWARD' "$iptlog" || fail "disarm did not remove the QUIC reject"
+printf '%s\n' 'servers-file=/tmp/resolv.dnsmasq' >"$HONK_DNSMASQ_CONF"
+: >"$HONK_SERVICE_LOG"
+honk_disarm quiet
+if grep -q 'restart_dnsmasq' "$HONK_SERVICE_LOG"; then
+    fail "disarm reloaded dnsmasq without a honk upstream"
+fi
+
+# A stale lock from a killed action must not block the next one.
+rm -rf "$work/state/honk.lock"
+mkdir -p "$work/state/honk.lock"
+printf '%s\n' 999999 >"$work/state/honk.lock/pid"
+honk_lock || fail "stale lock was not reclaimed"
+honk_unlock
+
+# A concurrent action waits for the lock instead of interleaving.
+( honk_lock; : >"$work/locked"; sleep 1; rm -f "$work/locked"; honk_unlock ) &
+bg=$!
+i=0
+while [ "$i" -lt 50 ] && [ ! -f "$work/locked" ]; do
+    i=$((i + 1))
+    sleep 0.05
+done
+[ -f "$work/locked" ] || fail "background lock was not taken"
+honk_lock || fail "lock wait failed"
+[ ! -f "$work/locked" ] || fail "lock was acquired while another action held it"
+honk_unlock
+wait "$bg" >/dev/null 2>&1 || true
+
+# A nat-start that passed the token check before the fence can restore the
+# jump while disarm waits on conntrack; the final unlink must remove it.
+echo 1 >"$jump"
+printf '%s\n' 'primary_ip=192.168.50.1' >"$work/state/honk.facts"
+printf '%s\n' 12345 >"$work/state/honk.port"
+: >"$work/state/honk.armed"
+cat >"$work/bin/conntrack-race" <<EOF
+#!/bin/sh
+if [ "\${1:-}" = -D ]; then
+    echo 1 > "$jump"
+fi
+exit 0
+EOF
+chmod 755 "$work/bin/conntrack-race"
+saved_ct=$HONK_CONNTRACK
+HONK_CONNTRACK="$work/bin/conntrack-race" honk_disarm race
+[ "$(cat "$jump")" = 0 ] || fail "disarm left a nat jump re-added during conntrack delete"
+HONK_CONNTRACK=$saved_ct
+rm -f "$work/state/honk.facts" "$work/state/honk.port"
+
+# nat-start rechecks the token after the watchdog step. A stop that lands in
+# that window must not restore the jump.
+sleep 30 &
+live=$!
+: >"$work/state/honk.armed"
+echo 0 >"$jump"
+printf '%s\n' 'ifname=br0' 'lan_ip=192.168.50.1' 'lan_mask=255.255.255.0' 'primary_ip=192.168.50.1' 'local_ip=192.168.50.1' >"$work/state/honk.facts"
+printf '%s\n' 12345 >"$work/state/honk.port"
+printf '%s\n' 192.168.1.1 >"$work/state/honk.gateway"
+printf '%s\n' 0 >"$work/state/honk.pingfails"
+printf '%s\n' "$live" >"$work/state/honk.pid"
+cat >"$work/bin/ping-race" <<EOF
+#!/bin/sh
+rm -f "$HONK_STATE_DIR/honk.armed"
+exit 0
+EOF
+chmod 755 "$work/bin/ping-race"
+saved_ping=$HONK_PING
+HONK_PING="$work/bin/ping-race" honk_nat_start
+HONK_PING=$saved_ping
+[ "$(cat "$jump")" = 0 ] || fail "nat-start restored the jump after the token vanished"
+kill "$live" >/dev/null 2>&1 || true
+wait "$live" >/dev/null 2>&1 || true
+rm -f "$work/state/honk.facts" "$work/state/honk.port" "$work/state/honk.gateway" "$work/state/honk.pid"
+
+# The firewall hook follows the arm token.
+: >"$iptlog"
+: >"$work/state/honk.armed"
+"$scripts/honk-firewall.sh"
+grep -q -- '-C FORWARD' "$iptlog" || fail "armed firewall hook did not check the QUIC reject"
+rm -f "$work/state/honk.armed"
+: >"$iptlog"
+"$scripts/honk-firewall.sh"
+grep -q -- '-D FORWARD' "$iptlog" || fail "disarmed firewall hook kept the QUIC reject"
 
 echo 0 >"$jump"
 : >"$iptlog"
@@ -549,6 +696,21 @@ printf '%s\n' 12345 >"$work/state/honk.port"
 grep -q -- '-j REDIRECT' "$iptlog" || fail "armed nat-start did not re-apply"
 kill "$sleep_pid" >/dev/null 2>&1 || true
 
+# A stop that lands during honk_apply is caught by the post-apply recheck.
+sleep 30 &
+live=$!
+printf '%s\n' "$live" >"$work/state/honk.pid"
+: >"$work/state/honk.armed"
+echo 0 >"$jump"
+printf '%s\n' 0 >"$work/state/honk.pingfails"
+: >"$work/drop-token"
+"$scripts/honk-nat.sh"
+[ "$(cat "$jump")" = 0 ] || fail "nat-start kept the jump after the token vanished during apply"
+rm -f "$work/drop-token"
+kill "$live" >/dev/null 2>&1 || true
+wait "$live" >/dev/null 2>&1 || true
+rm -f "$work/state/honk.facts" "$work/state/honk.port" "$work/state/honk.gateway" "$work/state/honk.pid"
+
 # Confirmation suppresses only the timer. A dead listener still disarms.
 sleep 30 &
 dead=$!
@@ -562,6 +724,21 @@ if honk_watch_step; then
 fi
 [ ! -f "$work/state/honk.armed" ] || fail "dead listener left the arm token"
 
+cat >"$work/jffs/scripts/dnsmasq.postconf" <<'EOF'
+#!/bin/sh
+# Merlin avahi owns UDP 5353, so honk cannot bind that port. 5354 is the
+# loopback DNS upstream dial_mode uses to learn the domain for an IP.
+CONFIG=$1
+[ -n "$CONFIG" ] || exit 0
+echo 'server=127.0.0.1#5354' >>"$CONFIG"
+EOF
+chmod 755 "$work/jffs/scripts/dnsmasq.postconf"
+# The oldest synced copy used a different header and 5353.
+printf '%s\n' '#!/bin/sh' '# honk: send dnsmasq upstream to honk DNS so redirect dial_mode learns domain<->IP' 'exit 0' >"$work/legacy-old.postconf"
+honk_replace_legacy_postconf "$work/legacy-old.postconf"
+[ ! -f "$work/legacy-old.postconf" ] || fail "old legacy postconf survived"
+grep -q '# honk: send dnsmasq upstream' "$HONK_PREFIX/dnsmasq.postconf.legacy" || fail "old legacy postconf was not kept"
+rm -f "$HONK_PREFIX/dnsmasq.postconf.legacy"
 "$scripts/install.sh"
 "$scripts/install.sh"
 [ "$(grep -c '# honk-begin' "$work/jffs/scripts/service-event")" = 1 ] || fail "service-event hook duplicated"
@@ -569,12 +746,21 @@ grep -q 'start:honkconfirm' "$work/jffs/scripts/service-event" || fail "confirm 
 grep -q 'honk-firewall.sh' "$work/jffs/scripts/firewall-start" || fail "firewall hook missing"
 grep -q 'honk-nat.sh' "$work/jffs/scripts/nat-start" || fail "nat hook missing"
 grep -q 'honk-boot.sh' "$work/jffs/scripts/services-start" || fail "boot hook missing"
+[ "$(grep -c '# honk-begin' "$work/jffs/scripts/dnsmasq.postconf")" = 1 ] || fail "dnsmasq hook duplicated"
+grep -q 'honk-dns.sh' "$work/jffs/scripts/dnsmasq.postconf" || fail "dnsmasq hook missing"
+if grep -q '^# Merlin avahi owns UDP 5353' "$work/jffs/scripts/dnsmasq.postconf"; then
+    fail "legacy dnsmasq postconf survived the upgrade"
+fi
+[ -f "$HONK_PREFIX/dnsmasq.postconf.legacy" ] || fail "legacy postconf was deleted instead of kept"
 printf '%s\n' 'honk_runtime off' 'keep_me 1' >"$HONK_SETTINGS"
 "$scripts/uninstall.sh"
 [ ! -d "$work/prefix" ] || fail "prefix survived uninstall"
 grep -q '^keep_me 1$' "$HONK_SETTINGS" || fail "uninstall removed a foreign setting"
 if grep -q '# honk-begin' "$work/jffs/scripts/service-event"; then
     fail "service-event hook survived uninstall"
+fi
+if grep -q '# honk-begin' "$work/jffs/scripts/dnsmasq.postconf"; then
+    fail "dnsmasq hook survived uninstall"
 fi
 
 # Install must not report success when the System page URL is absent, and
@@ -666,6 +852,10 @@ export HONK_BIN_DIRS="$work/root/usr/bin"
 : >"$iptlog"
 : >"$work/fc.log"
 : >"$work/runner.log"
+echo 0 >"$jump"
+echo 0 >"$forward"
+printf '%s\n' 'servers-file=/tmp/resolv.dnsmasq' >"$HONK_DNSMASQ_CONF"
+: >"$HONK_SERVICE_LOG"
 rm -f "$work/state/honk.log"
 "$scripts/honk-arm.sh" || fail "arm with a config file failed"
 grep -q -- '--redirect' "$binlog" || fail "honk-core was not started with --redirect"
@@ -683,9 +873,12 @@ grep -q '100.64.0.0/10' "$iptlog" || fail "CGNAT was not excluded"
 if grep -q ' OUTPUT ' "$iptlog"; then
     fail "an OUTPUT rule was installed"
 fi
-if grep -q ' -I ' "$iptlog"; then
+if grep -q -- '-t nat -I ' "$iptlog"; then
     fail "a rule was inserted at the head"
 fi
+grep -q 'restart_dnsmasq' "$HONK_SERVICE_LOG" || fail "arm did not reload dnsmasq"
+grep -q '^server=127.0.0.1#5354$' "$HONK_DNSMASQ_CONF" || fail "arm did not forward dnsmasq"
+grep -q -- '-I FORWARD 1' "$iptlog" || fail "arm did not insert the QUIC reject"
 grep -q '^disable$' "$work/fc.log" || fail "flow cache was not disabled"
 grep -q '^flush$' "$work/fc.log" || fail "flow cache was not flushed"
 grep -q '^disable$' "$work/runner.log" || fail "runner was not disabled"
